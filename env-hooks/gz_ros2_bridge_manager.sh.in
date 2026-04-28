@@ -1,0 +1,16 @@
+# Prepend install/lib to GZ_GUI_PLUGIN_PATH so gz sim discovers
+# libRos2BridgeManagerGui.so at runtime.
+_rbm_prefix="${COLCON_CURRENT_PREFIX:-${AMENT_CURRENT_PREFIX:-}}"
+if [ -n "$_rbm_prefix" ]; then
+  case ":${GZ_GUI_PLUGIN_PATH:-}:" in
+    *":$_rbm_prefix/lib:"*) ;;
+    *)
+      if [ -z "${GZ_GUI_PLUGIN_PATH:-}" ]; then
+        export GZ_GUI_PLUGIN_PATH="$_rbm_prefix/lib"
+      else
+        export GZ_GUI_PLUGIN_PATH="$_rbm_prefix/lib:$GZ_GUI_PLUGIN_PATH"
+      fi
+      ;;
+  esac
+fi
+unset _rbm_prefix

@@ -1,0 +1,5 @@
+<RCC>
+  <qresource prefix="/Ros2BridgeManagerGui">
+    <file>gui/Ros2BridgeManagerGui.qml</file>
+  </qresource>
+</RCC>
