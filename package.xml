@@ -16,6 +16,7 @@
 
   <!-- Gazebo Harmonic (Jazzy vendor packages) -->
   <depend>gz_gui_vendor</depend>
+  <depend>gz_sim_vendor</depend>
   <depend>gz_transport_vendor</depend>
   <depend>gz_msgs_vendor</depend>
 

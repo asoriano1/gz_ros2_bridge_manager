@@ -16,6 +16,7 @@ const char *categoryName(AssociationCategory c)
     case AssociationCategory::ContainsModelName:        return "ContainsModelName";
     case AssociationCategory::CompatibleButUnassigned:  return "CompatibleButUnassigned";
     case AssociationCategory::Unsupported:              return "Unsupported";
+    case AssociationCategory::EcmConfirmed:             return "EcmConfirmed";
   }
   return "Unknown";
 }

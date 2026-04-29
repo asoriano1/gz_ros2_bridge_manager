@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -9,10 +11,11 @@
 #include <QTimer>
 #include <QVariantList>
 
-#include <gz/gui/Plugin.hh>
+#include <gz/sim/gui/GuiSystem.hh>
 
 #include "gz_ros2_bridge_manager/BridgeTopicCandidate.hh"
 #include "gz_ros2_bridge_manager/BridgeTypeMapper.hh"
+#include "gz_ros2_bridge_manager/EcmSensorDiscovery.hh"
 #include "gz_ros2_bridge_manager/GazeboTopicDiscovery.hh"
 #include "gz_ros2_bridge_manager/ModelTopicSelectionStore.hh"
 #include "gz_ros2_bridge_manager/TopicAssociationHeuristic.hh"
@@ -20,7 +23,12 @@
 namespace gz_ros2_bridge_manager
 {
 
-class Ros2BridgeManagerGui : public gz::gui::Plugin
+/// Gazebo GUI plugin.
+///
+/// Inherits from gz::sim::GuiSystem (which extends gz::gui::Plugin) so that
+/// the ECM Update() callback is invoked on every simulation step.  All Qt
+/// interactions are guarded to the main thread via Qt::QueuedConnection.
+class Ros2BridgeManagerGui : public gz::sim::GuiSystem
 {
   Q_OBJECT
 
@@ -48,13 +56,21 @@ class Ros2BridgeManagerGui : public gz::gui::Plugin
   Q_PROPERTY(bool        busy                  READ busy                  NOTIFY busyChanged)
   Q_PROPERTY(bool        hasBridgeableTopics   READ hasBridgeableTopics   NOTIFY topicsChanged)
   Q_PROPERTY(QStringList warnings              READ warnings              NOTIFY topicsChanged)
-  Q_PROPERTY(QString     sensorNote            READ sensorNote            CONSTANT)
+  Q_PROPERTY(QString     sensorNote            READ sensorNote            NOTIFY topicsChanged)
+
+  // ECM-confirmed sensor hierarchy for the selected model.
+  Q_PROPERTY(bool        ecmAvailable          READ ecmAvailable          NOTIFY topicsChanged)
+  Q_PROPERTY(QVariantList sensorTree           READ sensorTree            NOTIFY topicsChanged)
 
 public:
   Ros2BridgeManagerGui();
   ~Ros2BridgeManagerGui() override = default;
 
   void LoadConfig(const tinyxml2::XMLElement *_pluginElem) override;
+
+  // GuiSystem override — called from the Gazebo update thread every sim step.
+  void Update(const gz::sim::UpdateInfo &_info,
+              gz::sim::EntityComponentManager &_ecm) override;
 
   // ---- Property reads ----
   QString      worldName()             const { return worldName_; }
@@ -78,6 +94,8 @@ public:
   bool         hasBridgeableTopics()   const;
   QStringList  warnings()              const { return warnings_; }
   QString      sensorNote()            const;
+  bool         ecmAvailable()          const { return ecmAvailable_; }
+  QVariantList sensorTree()            const { return sensorTree_; }
 
   // ---- Invokables ----
   Q_INVOKABLE void refresh();
@@ -107,18 +125,17 @@ private slots:
   void onAutoRefreshTick();
 
 private:
-  // Returns the store key for the current selection.
   std::string currentKey() const;
-
-  // Re-runs heuristic for current model, applies overrides, rebuilds views,
-  // recomputes session command, emits topicsChanged + bridgeCommandChanged.
   void recomputeAndPublish();
-
-  // Recomputes ONLY the session command (cheaper; used after toggling a
-  // checkbox or includeAllModels). Does NOT re-run the heuristic.
   void rebuildSession();
-
   void setStatus(const QString &text);
+
+  // ---- ECM snapshot (written by Update() thread, read by main thread) ----
+  // All accesses to ecmSensors_/ecmSensorCount_ must hold ecmMutex_.
+  std::mutex ecmMutex_;
+  std::vector<EcmSensorEntry> ecmSensors_;
+  size_t ecmSensorCount_{0};
+  std::atomic<bool> ecmUpdatePending_{false};
 
   // ---- Discovery snapshot (set on main thread after worker finishes) ----
   std::vector<GzTopicEntry> discoveredTopics_;
@@ -140,6 +157,10 @@ private:
   QVariantList associatedView_;
   QVariantList unassignedView_;
   QVariantList unsupportedView_;
+
+  // ---- ECM sensor tree (main thread, rebuilt in recomputeAndPublish) ----
+  bool         ecmAvailable_{false};
+  QVariantList sensorTree_;
 
   // ---- Generated commands & summaries ----
   QString  bridgeCommand_;

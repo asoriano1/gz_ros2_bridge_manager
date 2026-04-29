@@ -394,7 +394,107 @@ Rectangle {
         }
       }
 
-      // ---- Associated topics ----
+      // ---- ECM sensor tree (shown only when ECM has confirmed data) ----
+      Rectangle {
+        id: ecmCard
+        Layout.leftMargin: 10; Layout.rightMargin: 10
+        Layout.fillWidth: true
+        implicitHeight: ecmCol.implicitHeight + 16
+        color: "#e8f5e9"
+        border.color: "#43a047"; border.width: 1
+        radius: 4
+        visible: bridgeManager.ecmAvailable && bridgeManager.sensorTree.length > 0
+
+        property bool expanded: true
+
+        ColumnLayout {
+          id: ecmCol
+          anchors {
+            top: parent.top; left: parent.left; right: parent.right
+            topMargin: 8; leftMargin: 8; rightMargin: 8
+          }
+          spacing: 4
+
+          Item {
+            Layout.fillWidth: true
+            implicitHeight: ecmHeader.implicitHeight + 4
+            Label {
+              id: ecmHeader
+              text: (ecmCard.expanded ? "▼" : "▶") +
+                    "  Detected sensors in selected model (" +
+                    bridgeManager.sensorTree.length + ")"
+              font.bold: true; font.pixelSize: 12; color: "#1b5e20"
+            }
+            MouseArea {
+              anchors.fill: parent
+              cursorShape: Qt.PointingHandCursor
+              onClicked: ecmCard.expanded = !ecmCard.expanded
+            }
+          }
+
+          Label {
+            visible: ecmCard.expanded
+            text: "ECM-confirmed hierarchy: sensor topics are matched directly from the " +
+                  "Entity Component Manager. These are authoritative."
+            font.pixelSize: 9; font.italic: true; color: "#2e7d32"
+            wrapMode: Text.Wrap; Layout.fillWidth: true
+          }
+
+          // One row per sensor
+          Repeater {
+            model: ecmCard.expanded ? bridgeManager.sensorTree : []
+            delegate: Rectangle {
+              Layout.fillWidth: true
+              implicitHeight: sensorRow.implicitHeight + 8
+              color: modelData.resolved ? "#f1f8e9" : "#fff3e0"
+              radius: 3
+              border.color: modelData.resolved ? "#a5d6a7" : "#ffcc02"
+              border.width: 1
+
+              ColumnLayout {
+                id: sensorRow
+                anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter
+                          leftMargin: 6; rightMargin: 6; topMargin: 4; bottomMargin: 4 }
+                spacing: 2
+
+                RowLayout {
+                  spacing: 6
+                  Label {
+                    text: modelData.linkName + " / " + modelData.sensorName
+                    font.pixelSize: 10; font.bold: true; font.family: "monospace"
+                    color: "#1b5e20"; Layout.fillWidth: true; elide: Text.ElideRight
+                  }
+                  Label {
+                    text: modelData.sensorType
+                    font.pixelSize: 9; color: "#388e3c"; font.italic: true
+                  }
+                  Label {
+                    visible: !modelData.resolved
+                    text: "⚠ no topic"
+                    font.pixelSize: 9; color: "#e65100"
+                  }
+                }
+
+                Label {
+                  visible: modelData.resolved
+                  text: modelData.matchedTopics.join("\n")
+                  font.pixelSize: 9; font.family: "monospace"; color: "#33691e"
+                  wrapMode: Text.Wrap; Layout.fillWidth: true
+                }
+
+                Label {
+                  visible: modelData.warning.length > 0 && !modelData.resolved
+                  text: modelData.warning
+                  font.pixelSize: 9; font.italic: true; color: "#bf360c"
+                  wrapMode: Text.Wrap; Layout.fillWidth: true
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // ---- Associated topics (ECM confirmed + heuristic) ----
       Rectangle {
         Layout.leftMargin: 10; Layout.rightMargin: 10
         Layout.fillWidth: true
@@ -415,7 +515,9 @@ Rectangle {
           RowLayout {
             Layout.fillWidth: true
             Label {
-              text: "Likely associated (" + bridgeManager.associatedTopics.length + ")"
+              text: (bridgeManager.ecmAvailable
+                       ? "Detected sensor topics (" : "Heuristic suggestions (") +
+                    bridgeManager.associatedTopics.length + ")"
               font.bold: true; font.pixelSize: 12; color: "#1b5e20"
               Layout.fillWidth: true
             }
@@ -567,8 +669,9 @@ Rectangle {
         Layout.leftMargin: 10; Layout.rightMargin: 10
         Layout.fillWidth: true
         implicitHeight: sensorNoteLabel.implicitHeight + 14
-        color: "#fff8e1"
-        border.color: "#ffe082"; border.width: 1
+        color: bridgeManager.ecmAvailable ? "#e8f5e9" : "#fff8e1"
+        border.color: bridgeManager.ecmAvailable ? "#81c784" : "#ffe082"
+        border.width: 1
         radius: 4
 
         Label {
@@ -579,7 +682,8 @@ Rectangle {
           }
           text: "Sensor hierarchy: " + bridgeManager.sensorNote
           font.pixelSize: 10; font.italic: true
-          color: "#5d4037"; wrapMode: Text.Wrap
+          color: bridgeManager.ecmAvailable ? "#1b5e20" : "#5d4037"
+          wrapMode: Text.Wrap
         }
       }
 

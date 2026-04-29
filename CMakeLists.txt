@@ -14,6 +14,7 @@ find_package(ament_cmake REQUIRED)
 
 # ---- Gazebo Harmonic ----
 find_package(gz-gui8        REQUIRED)
+find_package(gz-sim8        REQUIRED)
 find_package(gz-transport13 REQUIRED)
 find_package(gz-msgs10      REQUIRED)
 
@@ -37,6 +38,7 @@ set(PLUGIN_SOURCES
   src/BridgeTypeMapper.cpp
   src/WorldDiscovery.cpp
   src/GazeboTopicDiscovery.cpp
+  src/EcmSensorDiscovery.cpp
   src/ModelSensorDiscovery.cpp
   src/TopicAssociationHeuristic.cpp
   src/BridgeCommandBuilder.cpp
@@ -64,6 +66,7 @@ target_include_directories(${PLUGIN_NAME}
 target_link_libraries(${PLUGIN_NAME}
   PRIVATE
     gz-gui8::gz-gui8
+    gz-sim8::gz-sim8
     gz-transport13::gz-transport13
     gz-msgs10::gz-msgs10
     Qt5::Core
@@ -140,6 +143,18 @@ if(BUILD_TESTING)
     src/BridgeTypeMapper.cpp
   )
   target_include_directories(test_bridge_session
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
+
+  # Pure matching logic — only EcmSensorDiscovery + BridgeTypeMapper needed.
+  # GazeboTopicDiscovery.cpp is NOT compiled here (would require gz-transport13);
+  # tests only use the GzTopicEntry struct from the header.
+  ament_add_gtest(test_ecm_sensor_discovery
+    test/test_ecm_sensor_discovery.cpp
+    src/EcmSensorDiscovery.cpp
+    src/BridgeTypeMapper.cpp
+  )
+  target_include_directories(test_ecm_sensor_discovery
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
   )
 endif()

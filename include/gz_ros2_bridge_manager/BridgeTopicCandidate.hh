@@ -9,11 +9,12 @@ namespace gz_ros2_bridge_manager
 // Ordering reflects strength: higher value = stronger association.
 enum class AssociationCategory
 {
-  Unsupported = 0,              // not bridgeable at all
-  CompatibleButUnassigned = 1,  // bridgeable, no confident model match
-  ContainsModelName = 2,        // model name appears as a token in topic path
+  Unsupported = 0,                // not bridgeable at all
+  CompatibleButUnassigned = 1,    // bridgeable, no confident model match
+  ContainsModelName = 2,          // model name appears as a token in topic path
   ContainsSanitizedModelName = 3, // sanitized form appears as a token
-  ExactModelPath = 4,           // /model/<name>/ or /world/<w>/model/<name>/
+  ExactModelPath = 4,             // /model/<name>/ or /world/<w>/model/<name>/
+  EcmConfirmed = 5,               // matched via ECM sensor hierarchy (authoritative)
 };
 
 const char *categoryName(AssociationCategory c);
