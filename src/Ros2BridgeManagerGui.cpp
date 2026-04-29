@@ -63,20 +63,52 @@ QVariantList toVariantList(const std::vector<BridgeTopicCandidate> &cs)
 QVariantMap sensorToVariantMap(const DiscoveredSensor &ds)
 {
   QVariantMap m;
-  m[QStringLiteral("modelName")]    = QString::fromStdString(ds.sensor.modelName);
-  m[QStringLiteral("linkName")]     = QString::fromStdString(ds.sensor.linkName);
-  m[QStringLiteral("sensorName")]   = QString::fromStdString(ds.sensor.sensorName);
-  m[QStringLiteral("sensorType")]   = QString::fromStdString(ds.sensor.sensorType);
-  m[QStringLiteral("declaredTopic")]= QString::fromStdString(ds.sensor.declaredTopic);
-  m[QStringLiteral("matchSource")]  = QString::fromLatin1(matchSourceName(ds.matchSource));
-  m[QStringLiteral("nestedModel")]  = ds.sensor.nestedModel;
-  m[QStringLiteral("resolved")]     = ds.resolved;
-  m[QStringLiteral("warning")]      = QString::fromStdString(ds.warning);
-  m[QStringLiteral("topicCount")]   = static_cast<int>(ds.matchedTopicNames.size());
-  QStringList specs;
+  m[QStringLiteral("modelName")]     = QString::fromStdString(ds.sensor.modelName);
+  m[QStringLiteral("linkName")]      = QString::fromStdString(ds.sensor.linkName);
+  m[QStringLiteral("sensorName")]    = QString::fromStdString(ds.sensor.sensorName);
+  m[QStringLiteral("sensorType")]    = QString::fromStdString(ds.sensor.sensorType);
+  m[QStringLiteral("declaredTopic")] = QString::fromStdString(ds.sensor.declaredTopic);
+  m[QStringLiteral("fallbackPrefix")]= QString::fromStdString(ds.sensor.fallbackGazeboTopicPrefix);
+  m[QStringLiteral("matchSource")]   = QString::fromLatin1(matchSourceName(ds.matchSource));
+  m[QStringLiteral("nestedModel")]   = ds.sensor.nestedModel;
+  m[QStringLiteral("resolved")]      = ds.resolved;
+  m[QStringLiteral("warning")]       = QString::fromStdString(ds.warning);
+  m[QStringLiteral("topicCount")]    = static_cast<int>(ds.matchedTopicNames.size());
+
+  // Per-topic detail entries (topic + parsed gz/ros2 types from bridge spec).
+  QVariantList topicDetails;
+  for (size_t i = 0; i < ds.matchedTopicNames.size(); ++i)
+  {
+    QVariantMap td;
+    td[QStringLiteral("topic")] = QString::fromStdString(ds.matchedTopicNames[i]);
+
+    QString gzType, ros2Type;
+    if (i < ds.matchedBridgeSpecs.size())
+    {
+      const auto &spec = ds.matchedBridgeSpecs[i];
+      const auto at1 = spec.find('@');
+      if (at1 != std::string::npos)
+      {
+        const auto at2 = spec.find('@', at1 + 1);
+        if (at2 != std::string::npos)
+        {
+          ros2Type = QString::fromStdString(spec.substr(at1 + 1, at2 - at1 - 1));
+          gzType   = QString::fromStdString(spec.substr(at2 + 1));
+        }
+      }
+    }
+    td[QStringLiteral("gzType")]   = gzType;
+    td[QStringLiteral("ros2Type")] = ros2Type;
+    topicDetails.append(td);
+  }
+  m[QStringLiteral("matchedTopicDetails")] = topicDetails;
+
+  // Keep a plain string list for backward compatibility.
+  QStringList topicNames;
   for (const auto &s : ds.matchedTopicNames)
-    specs << QString::fromStdString(s);
-  m[QStringLiteral("matchedTopics")] = specs;
+    topicNames << QString::fromStdString(s);
+  m[QStringLiteral("matchedTopics")] = topicNames;
+
   return m;
 }
 
