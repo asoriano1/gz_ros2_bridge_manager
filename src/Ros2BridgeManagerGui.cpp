@@ -10,24 +10,11 @@
 #include <gz/plugin/Register.hh>
 #include <gz/common/Console.hh>
 
-// ECM access
 #include <gz/sim/EntityComponentManager.hh>
-#include <gz/sim/components/AirPressureSensor.hh>
-#include <gz/sim/components/Camera.hh>
-#include <gz/sim/components/DepthCamera.hh>
-#include <gz/sim/components/ForceTorque.hh>
-#include <gz/sim/components/GpuLidar.hh>
-#include <gz/sim/components/Imu.hh>
-#include <gz/sim/components/Lidar.hh>
-#include <gz/sim/components/Magnetometer.hh>
-#include <gz/sim/components/Name.hh>
-#include <gz/sim/components/NavSat.hh>
-#include <gz/sim/components/ParentEntity.hh>
-#include <gz/sim/components/RgbdCamera.hh>
-#include <gz/sim/components/Sensor.hh>
 
 #include "gz_ros2_bridge_manager/BridgeSession.hh"
 #include "gz_ros2_bridge_manager/EcmSensorDiscovery.hh"
+#include "gz_ros2_bridge_manager/EcmSensorExtractor.hh"
 #include "gz_ros2_bridge_manager/ModelSensorDiscovery.hh"
 #include "gz_ros2_bridge_manager/WorldDiscovery.hh"
 
@@ -44,24 +31,6 @@ namespace
 {
 
 constexpr int kAutoRefreshIntervalMs = 2500;
-
-// ---- Sensor type detection from ECM -------------------------------------
-
-std::string detectSensorType(const gz::sim::EntityComponentManager &ecm,
-                              gz::sim::Entity entity)
-{
-  if (ecm.Component<gz::sim::components::Camera>(entity))      return "camera";
-  if (ecm.Component<gz::sim::components::GpuLidar>(entity))    return "gpu_lidar";
-  if (ecm.Component<gz::sim::components::Lidar>(entity))       return "lidar";
-  if (ecm.Component<gz::sim::components::Imu>(entity))         return "imu";
-  if (ecm.Component<gz::sim::components::DepthCamera>(entity)) return "depth_camera";
-  if (ecm.Component<gz::sim::components::RgbdCamera>(entity))  return "rgbd_camera";
-  if (ecm.Component<gz::sim::components::ForceTorque>(entity)) return "force_torque";
-  if (ecm.Component<gz::sim::components::Magnetometer>(entity)) return "magnetometer";
-  if (ecm.Component<gz::sim::components::AirPressureSensor>(entity)) return "air_pressure";
-  if (ecm.Component<gz::sim::components::NavSat>(entity))      return "navsat";
-  return "unknown";
-}
 
 // ---- QML helpers --------------------------------------------------------
 
@@ -99,6 +68,8 @@ QVariantMap sensorToVariantMap(const DiscoveredSensor &ds)
   m[QStringLiteral("sensorName")]   = QString::fromStdString(ds.sensor.sensorName);
   m[QStringLiteral("sensorType")]   = QString::fromStdString(ds.sensor.sensorType);
   m[QStringLiteral("declaredTopic")]= QString::fromStdString(ds.sensor.declaredTopic);
+  m[QStringLiteral("matchSource")]  = QString::fromLatin1(matchSourceName(ds.matchSource));
+  m[QStringLiteral("nestedModel")]  = ds.sensor.nestedModel;
   m[QStringLiteral("resolved")]     = ds.resolved;
   m[QStringLiteral("warning")]      = QString::fromStdString(ds.warning);
   m[QStringLiteral("topicCount")]   = static_cast<int>(ds.matchedTopicNames.size());
@@ -139,11 +110,7 @@ std::vector<BridgeTopicCandidate> ecmToCandidates(
       c.confidenceLabel = "ECM confirmed";
       c.isGeneric  = false;
 
-      // Find the gz type for display
-      for (const auto &entry : std::vector<std::string>{topicName})
-        (void)entry;  // topic name is already in c.gzTopic
-
-      // Parse gz type from bridge spec (<topic>@<ros2type>@<gztype>)
+      // Parse gz type and ros2 type from bridge spec (<topic>@<ros2type>@<gztype>)
       const auto at1 = spec.find('@');
       if (at1 != std::string::npos)
       {
@@ -159,13 +126,14 @@ std::vector<BridgeTopicCandidate> ecmToCandidates(
       result.push_back(std::move(c));
     }
 
-    // Unresolved sensor: emit one placeholder candidate so the sensor is visible.
+    // Unresolved sensor: emit one placeholder so the sensor is visible.
     if (!ds.resolved)
     {
       BridgeTopicCandidate c;
-      c.gzTopic         = ds.sensor.declaredTopic.empty()
-                            ? EcmTopicMatcher::defaultTopicPrefix(tree.worldName, ds.sensor)
-                            : ds.sensor.declaredTopic;
+      // Use fallback prefix if available, otherwise the declared topic.
+      c.gzTopic = !ds.sensor.declaredTopic.empty()
+                    ? ds.sensor.declaredTopic
+                    : ds.sensor.fallbackGazeboTopicPrefix;
       c.bridgeable      = false;
       c.checked         = false;
       c.category        = AssociationCategory::EcmConfirmed;
@@ -212,81 +180,31 @@ void Ros2BridgeManagerGui::LoadConfig(const tinyxml2::XMLElement * /*_pluginElem
 void Ros2BridgeManagerGui::Update(const gz::sim::UpdateInfo & /*_info*/,
                                    gz::sim::EntityComponentManager &_ecm)
 {
-  // Quick sensor-count check — O(n) but very cheap.
-  size_t newCount = 0;
-  _ecm.Each<gz::sim::components::Sensor>(
-    [&](const gz::sim::Entity &, const gz::sim::components::Sensor *) -> bool
-    {
-      ++newCount;
-      return true;
-    });
+  const size_t newFingerprint = EcmSensorExtractor::computeFingerprint(_ecm);
 
   {
     std::lock_guard<std::mutex> lk(ecmMutex_);
-    if (newCount == ecmSensorCount_)
-      return;  // nothing changed
+    if (newFingerprint == ecmFingerprint_)
+      return;
   }
 
-  // Full extraction — done without holding the lock.
-  std::vector<EcmSensorEntry> newSensors;
-  newSensors.reserve(newCount);
+  // Fingerprint changed — do full extraction without holding the lock.
+  std::vector<EcmSensorEntry> newSensors = EcmSensorExtractor::extract(_ecm);
 
-  _ecm.Each<gz::sim::components::Sensor,
-            gz::sim::components::Name,
-            gz::sim::components::ParentEntity>(
-    [&](const gz::sim::Entity &sensorEnt,
-        const gz::sim::components::Sensor *,
-        const gz::sim::components::Name *nameCmp,
-        const gz::sim::components::ParentEntity *parentCmp) -> bool
-    {
-      EcmSensorEntry e;
-      e.sensorEntity = static_cast<EntityId>(sensorEnt);
-      e.sensorName   = nameCmp->Data();
-      e.sensorType   = detectSensorType(_ecm, sensorEnt);
+  gzdbg << "[BridgeManager] ECM sensor state changed: "
+        << newSensors.size() << " sensor(s) detected\n";
 
-      // SensorTopic: the declared transport topic/prefix.
-      const auto *topicCmp =
-          _ecm.Component<gz::sim::components::SensorTopic>(sensorEnt);
-      if (topicCmp)
-        e.declaredTopic = topicCmp->Data();
-
-      // Walk up: sensor → link → model.
-      gz::sim::Entity linkEnt = parentCmp->Data();
-      e.linkEntity = static_cast<EntityId>(linkEnt);
-      const auto *linkNameCmp =
-          _ecm.Component<gz::sim::components::Name>(linkEnt);
-      if (linkNameCmp)
-        e.linkName = linkNameCmp->Data();
-
-      const auto *linkParentCmp =
-          _ecm.Component<gz::sim::components::ParentEntity>(linkEnt);
-      if (linkParentCmp)
-      {
-        gz::sim::Entity modelEnt = linkParentCmp->Data();
-        e.modelEntity = static_cast<EntityId>(modelEnt);
-        const auto *modelNameCmp =
-            _ecm.Component<gz::sim::components::Name>(modelEnt);
-        if (modelNameCmp)
-          e.modelName = modelNameCmp->Data();
-      }
-
-      newSensors.push_back(std::move(e));
-      return true;
-    });
-
-  // Store and notify the main thread exactly once per change.
   bool shouldNotify = false;
   {
     std::lock_guard<std::mutex> lk(ecmMutex_);
     ecmSensors_     = std::move(newSensors);
-    ecmSensorCount_ = newCount;
+    ecmFingerprint_ = newFingerprint;
     if (!ecmUpdatePending_.exchange(true))
       shouldNotify = true;
   }
 
   if (shouldNotify)
   {
-    // Safe to call from any thread with Qt::QueuedConnection.
     QMetaObject::invokeMethod(this,
       [this]()
       {
@@ -341,12 +259,56 @@ void Ros2BridgeManagerGui::recomputeAndPublish()
     ecmSensors = ecmSensors_;
   }
 
+  // ---- ECM status counters ------------------------------------------------
+  {
+    std::unordered_set<EntityId> modelIds;
+    for (const auto &s : ecmSensors)
+      if (s.modelEntity != 0) modelIds.insert(s.modelEntity);
+    ecmModelCount_  = static_cast<int>(modelIds.size());
+    ecmSensorCount_ = static_cast<int>(ecmSensors.size());
+  }
+
   // ---- ECM-confirmed sensor matching for selected model -------------------
   const std::string world = worldName_.toStdString();
   const std::string model = selectedModel_.toStdString();
 
   ModelSensorTree sensorTree = EcmTopicMatcher::matchAll(
       world, ecmSensors, model, discoveredTopics_);
+
+  // Count per-selection stats.
+  int matchedTopics  = 0;
+  int unresolvedSensors = 0;
+  for (const auto &ds : sensorTree.sensors)
+  {
+    matchedTopics += static_cast<int>(ds.matchedTopicNames.size());
+    if (!ds.resolved) ++unresolvedSensors;
+  }
+  selectedModelSensorCount_           = static_cast<int>(sensorTree.sensors.size());
+  selectedModelMatchedTopicCount_     = matchedTopics;
+  selectedModelUnresolvedSensorCount_ = unresolvedSensors;
+
+  // Build sensorDiscoveryStatus string.
+  if (ecmSensors.empty())
+  {
+    sensorDiscoveryStatus_ = QStringLiteral("No sensors detected in ECM");
+  }
+  else
+  {
+    sensorDiscoveryStatus_ =
+        QString("%1 sensor%2 across %3 model%4")
+            .arg(ecmSensorCount_)
+            .arg(ecmSensorCount_ == 1 ? "" : "s")
+            .arg(ecmModelCount_)
+            .arg(ecmModelCount_ == 1 ? "" : "s");
+    if (!model.empty())
+    {
+      sensorDiscoveryStatus_ +=
+          QString(" — %1 in selection (%2 resolved, %3 unresolved)")
+              .arg(selectedModelSensorCount_)
+              .arg(selectedModelSensorCount_ - unresolvedSensors)
+              .arg(unresolvedSensors);
+    }
+  }
 
   // Topics already claimed by ECM — excluded from heuristic below.
   std::unordered_set<std::string> coveredTopics;

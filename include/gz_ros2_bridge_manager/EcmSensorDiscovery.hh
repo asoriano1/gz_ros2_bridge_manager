@@ -11,68 +11,97 @@ namespace gz_ros2_bridge_manager
 
 using EntityId = uint64_t;
 
-/// Raw sensor information extracted from the ECM.
-/// Plain C++ — no Qt, no gz-sim headers — to keep this testable standalone.
+/// How a sensor's topic was matched against the advertised gz-transport list.
+/// Higher is more authoritative.
+enum class MatchSource
+{
+  Unresolved = 0,            // sensor found in ECM but no topic advertised
+  EcmStandardPrefix = 1,     // no SensorTopic; matched via Gazebo default path
+  EcmSensorTopicPrefix = 2,  // SensorTopic present; topic starts with it (suffix match)
+  EcmSensorTopicExact = 3,   // SensorTopic present; exact topic match
+};
+
+const char *matchSourceName(MatchSource s);
+
+/// Raw sensor data extracted from the ECM.
+/// Plain C++ only — no Qt, no gz-sim types — to keep this testable standalone.
 struct EcmSensorEntry
 {
   EntityId modelEntity  = 0;
   std::string modelName;
+  bool nestedModel = false;   // true when the direct parent model is itself nested
+
   EntityId linkEntity   = 0;
   std::string linkName;
+
   EntityId sensorEntity = 0;
   std::string sensorName;
-  std::string sensorType;     // "camera", "gpu_lidar", "imu", …
-  std::string declaredTopic;  // SensorTopic component value; may be empty
+  std::string sensorType;              // "camera", "gpu_lidar", "imu", …
+
+  std::string declaredTopic;           // SensorTopic component value; empty if absent
+  std::string fallbackGazeboTopicPrefix; // /world/<w>/model/<m>/link/<l>/sensor/<s>
 };
 
 /// One ECM-confirmed sensor after topic matching.
 struct DiscoveredSensor
 {
   EcmSensorEntry sensor;
-  std::vector<std::string> matchedTopicNames;  // actually advertised topics
+  std::vector<std::string> matchedTopicNames;  // advertised topics
   std::vector<std::string> matchedBridgeSpecs; // bridgeable specs only
-  bool resolved = false;   // ≥1 topic matched
+  bool resolved = false;
+  MatchSource matchSource = MatchSource::Unresolved;
   std::string warning;
 };
 
-/// Full ECM-confirmed sensor result for a model (or all models).
+/// Full result for a model (or all models).
 struct ModelSensorTree
 {
   std::string worldName;
   std::string modelName;
   std::vector<DiscoveredSensor> sensors;
   std::string warning;
-  bool ecmConfirmed = false;  // true when data came from a live ECM Update()
+  bool ecmConfirmed = false;
 };
 
-/// Pure matching logic that maps EcmSensorEntries against advertised gz-transport
-/// topics.  This class has NO gz-sim dependency and can be unit-tested with plain
-/// GzTopicEntry vectors.
+/// Pure matching logic: maps EcmSensorEntries to advertised gz-transport topics.
+/// No gz-sim dependency — testable with plain GzTopicEntry vectors.
 class EcmTopicMatcher
 {
 public:
-  // Topic suffixes published by a sensor type (appended to the declared prefix).
-  // Empty string means try the prefix itself as an exact topic.
+  /// Topic suffixes published by a sensor type; appended to the declared prefix.
   static std::vector<std::string> suffixesForType(const std::string &sensorType);
 
-  // Constructs Gazebo's default topic prefix for a sensor when SensorTopic is absent:
-  //   /world/<world>/model/<model>/link/<link>/sensor/<sensor>
+  /// Constructs Gazebo's default topic prefix for a sensor when SensorTopic is absent:
+  ///   /world/<world>/model/<model>/link/<link>/sensor/<sensor>
   static std::string defaultTopicPrefix(const std::string &worldName,
                                         const EcmSensorEntry &sensor);
 
-  // Match one sensor against the full advertised-topic list.
+  /// Match one sensor against the full advertised-topic list.
+  /// Matching priority:
+  ///   1. declaredTopic exact match         → EcmSensorTopicExact
+  ///   2. declaredTopic + suffix/prefix     → EcmSensorTopicPrefix
+  ///   3. fallbackGazeboTopicPrefix matches → EcmStandardPrefix
+  ///   4. nothing                           → Unresolved
   static DiscoveredSensor matchSensor(
-      const std::string &worldName,
       const EcmSensorEntry &sensor,
       const std::vector<GzTopicEntry> &advertisedTopics);
 
-  // Match all sensors, optionally filtering to a single model name.
-  // Populates `allMatchedTopics` for exclusion from heuristic matching.
+  /// Match all sensors, optionally filtering to a single model name.
   static ModelSensorTree matchAll(
       const std::string &worldName,
       const std::vector<EcmSensorEntry> &sensors,
       const std::string &filterModelName,
       const std::vector<GzTopicEntry> &advertisedTopics);
+
+private:
+  /// Try to match a given prefix (exact + suffix expansion + sub-path prefix)
+  /// against the advertised list.  Returns MatchSource::Unresolved if nothing found.
+  static MatchSource tryMatchPrefix(
+      const std::string &prefix,
+      const std::string &sensorType,
+      const std::vector<GzTopicEntry> &advertisedTopics,
+      std::vector<std::string> &outTopicNames,
+      std::vector<std::string> &outBridgeSpecs);
 };
 
 }  // namespace gz_ros2_bridge_manager

@@ -39,6 +39,7 @@ set(PLUGIN_SOURCES
   src/WorldDiscovery.cpp
   src/GazeboTopicDiscovery.cpp
   src/EcmSensorDiscovery.cpp
+  src/EcmSensorExtractor.cpp
   src/ModelSensorDiscovery.cpp
   src/TopicAssociationHeuristic.cpp
   src/BridgeCommandBuilder.cpp

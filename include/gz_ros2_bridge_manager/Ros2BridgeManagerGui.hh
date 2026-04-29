@@ -58,9 +58,17 @@ class Ros2BridgeManagerGui : public gz::sim::GuiSystem
   Q_PROPERTY(QStringList warnings              READ warnings              NOTIFY topicsChanged)
   Q_PROPERTY(QString     sensorNote            READ sensorNote            NOTIFY topicsChanged)
 
-  // ECM-confirmed sensor hierarchy for the selected model.
+  // ECM-confirmed sensor hierarchy.
   Q_PROPERTY(bool        ecmAvailable          READ ecmAvailable          NOTIFY topicsChanged)
   Q_PROPERTY(QVariantList sensorTree           READ sensorTree            NOTIFY topicsChanged)
+
+  // ECM status counters (updated each time ECM fingerprint changes).
+  Q_PROPERTY(int         ecmModelCount                 READ ecmModelCount                 NOTIFY topicsChanged)
+  Q_PROPERTY(int         ecmSensorCount                READ ecmSensorCount                NOTIFY topicsChanged)
+  Q_PROPERTY(int         selectedModelSensorCount      READ selectedModelSensorCount      NOTIFY topicsChanged)
+  Q_PROPERTY(int         selectedModelMatchedTopicCount READ selectedModelMatchedTopicCount NOTIFY topicsChanged)
+  Q_PROPERTY(int         selectedModelUnresolvedSensorCount READ selectedModelUnresolvedSensorCount NOTIFY topicsChanged)
+  Q_PROPERTY(QString     sensorDiscoveryStatus         READ sensorDiscoveryStatus         NOTIFY topicsChanged)
 
 public:
   Ros2BridgeManagerGui();
@@ -97,6 +105,13 @@ public:
   bool         ecmAvailable()          const { return ecmAvailable_; }
   QVariantList sensorTree()            const { return sensorTree_; }
 
+  int     ecmModelCount()                      const { return ecmModelCount_; }
+  int     ecmSensorCount()                     const { return ecmSensorCount_; }
+  int     selectedModelSensorCount()           const { return selectedModelSensorCount_; }
+  int     selectedModelMatchedTopicCount()     const { return selectedModelMatchedTopicCount_; }
+  int     selectedModelUnresolvedSensorCount() const { return selectedModelUnresolvedSensorCount_; }
+  QString sensorDiscoveryStatus()              const { return sensorDiscoveryStatus_; }
+
   // ---- Invokables ----
   Q_INVOKABLE void refresh();
   Q_INVOKABLE void selectModel(const QString &modelName);
@@ -131,10 +146,10 @@ private:
   void setStatus(const QString &text);
 
   // ---- ECM snapshot (written by Update() thread, read by main thread) ----
-  // All accesses to ecmSensors_/ecmSensorCount_ must hold ecmMutex_.
+  // All accesses to ecmSensors_ / ecmFingerprint_ must hold ecmMutex_.
   std::mutex ecmMutex_;
   std::vector<EcmSensorEntry> ecmSensors_;
-  size_t ecmSensorCount_{0};
+  size_t ecmFingerprint_{0};  // fingerprint-based change detection
   std::atomic<bool> ecmUpdatePending_{false};
 
   // ---- Discovery snapshot (set on main thread after worker finishes) ----
@@ -161,6 +176,14 @@ private:
   // ---- ECM sensor tree (main thread, rebuilt in recomputeAndPublish) ----
   bool         ecmAvailable_{false};
   QVariantList sensorTree_;
+
+  // ---- ECM status counters (main thread, updated in recomputeAndPublish) ----
+  int     ecmModelCount_{0};
+  int     ecmSensorCount_{0};
+  int     selectedModelSensorCount_{0};
+  int     selectedModelMatchedTopicCount_{0};
+  int     selectedModelUnresolvedSensorCount_{0};
+  QString sensorDiscoveryStatus_;
 
   // ---- Generated commands & summaries ----
   QString  bridgeCommand_;
