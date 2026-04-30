@@ -13,39 +13,36 @@ Rectangle {
   Layout.minimumHeight: 320
   Layout.preferredHeight: 700
 
+  // Show models with no ECM sensors (hidden by default).
+  property bool showModelsWithoutSensors: false
+
+  // Computed from C++ modelCards, filtered by showModelsWithoutSensors.
+  property var visibleCards: {
+    if (showModelsWithoutSensors) return bridgeManager.modelCards
+    return bridgeManager.modelCards.filter(function(c) { return c.ecmSensorCount > 0 })
+  }
+
   // ---- JS helpers --------------------------------------------------------
 
-  function topicCountLabel() {
-    var assoc  = bridgeManager.associatedTopics.length
-    var unassn = bridgeManager.unassignedTopics.length
-    var unsup  = bridgeManager.unsupportedTopics.length
-    return "associated: " + assoc +
-           "  •  additional: " + unassn +
-           "  •  unsupported: " + unsup
-  }
-
-  // Human-readable match source labels and colours for the sensor detail view.
-  function matchSourceLabel(src) {
-    if (src === "EcmSensorTopicExact")  return "SensorTopic exact";
-    if (src === "EcmSensorTopicPrefix") return "SensorTopic prefix";
-    if (src === "EcmStandardPrefix")    return "Gazebo standard prefix";
-    if (src === "Unresolved")           return "Unresolved";
-    return src;
-  }
+  // New matchSourceName() strings are already user-friendly — pass through.
+  function matchSourceLabel(src) { return src }
 
   function matchSourceColor(src) {
-    if (src === "EcmSensorTopicExact")  return "#0d47a1";
-    if (src === "EcmSensorTopicPrefix") return "#1565c0";
-    if (src === "EcmStandardPrefix")    return "#1976d2";
-    if (src === "Unresolved")           return "#bf360c";
+    if (src === "ECM exact")     return "#0d47a1";
+    if (src === "ECM prefix")    return "#1565c0";
+    if (src === "ECM path")      return "#1976d2";
+    if (src === "Name match")    return "#e65100";
+    if (src === "Type fallback") return "#f57c00";
+    if (src === "Unresolved")    return "#bf360c";
     return "#757575";
   }
 
-  // ---- Reusable flat topic row (used in heuristic / additional sections) ----
+  // ---- TopicRow: used by Additional and Unsupported sections -------------
   component TopicRow: Rectangle {
     id: rowRoot
-    property var entry
-    property bool checkable: true
+    property var    entry
+    property string modelName: ""
+    property bool   checkable: true
 
     width: ListView.view ? ListView.view.width : implicitWidth
     height: 30
@@ -61,7 +58,12 @@ Rectangle {
         padding: 0
         checked: entry.checked
         enabled: rowRoot.checkable && entry.bridgeable
-        onToggled: bridgeManager.setTopicChecked(entry.topic, checked)
+        onToggled: {
+          if (rowRoot.modelName.length > 0)
+            bridgeManager.setTopicChecked(rowRoot.modelName, entry.topic, checked)
+          else
+            bridgeManager.setAdditionalTopicChecked(entry.topic, checked)
+        }
       }
 
       Item {
@@ -84,11 +86,10 @@ Rectangle {
         Layout.fillWidth: true
         Layout.preferredWidth: 140
         ToolTip.visible: topicHover.containsMouse
-        ToolTip.text: entry.warning.length > 0
+        ToolTip.text: entry.warning && entry.warning.length > 0
                       ? entry.topic + "\n" + entry.warning
                       : entry.topic
         ToolTip.delay: 400
-
         MouseArea {
           id: topicHover
           anchors.fill: parent
@@ -100,7 +101,7 @@ Rectangle {
       Label {
         text: {
           var t = entry.gzType
-          return t.length > 0 ? t.replace("gz.msgs.", "") : "?"
+          return t && t.length > 0 ? t.replace("gz.msgs.", "") : "?"
         }
         font.pixelSize: 10; font.family: "monospace"
         color: "#1565c0"
@@ -109,17 +110,9 @@ Rectangle {
       }
 
       Label {
-        text: entry.confidence
+        text: entry.confidence || ""
         font.pixelSize: 9; font.italic: true
-        color: {
-          if (entry.category === "EcmConfirmed")                return "#0d47a1"
-          if (entry.category === "ExactModelPath")              return "#1b5e20"
-          if (entry.category === "ContainsSanitizedModelName")  return "#2e7d32"
-          if (entry.category === "ContainsModelName")           return "#33691e"
-          if (entry.ambiguous)                                  return "#c62828"
-          if (entry.isGeneric)                                  return "#ef6c00"
-          return "#757575"
-        }
+        color: "#757575"
         elide: Text.ElideRight
         Layout.preferredWidth: 100
       }
@@ -153,6 +146,16 @@ Rectangle {
         }
 
         CheckBox {
+          text: "All models"
+          font.pixelSize: 10; padding: 4
+          checked: root.showModelsWithoutSensors
+          onToggled: root.showModelsWithoutSensors = checked
+          ToolTip.visible: hovered
+          ToolTip.text: "Show models with no detected ECM sensors"
+          ToolTip.delay: 400
+        }
+
+        CheckBox {
           text: "Auto"
           font.pixelSize: 10; padding: 4
           checked: bridgeManager.autoRefresh
@@ -174,482 +177,405 @@ Rectangle {
       Rectangle {
         Layout.leftMargin: 10; Layout.rightMargin: 10
         Layout.fillWidth: true
-        implicitHeight: statusCol.implicitHeight + 10
+        implicitHeight: statusRow.implicitHeight + 14
         color: bridgeManager.worldName.length > 0 ? "#e8f5e9" : "#fce4ec"
         radius: 4
 
-        ColumnLayout {
-          id: statusCol
+        RowLayout {
+          id: statusRow
           anchors {
             left: parent.left; right: parent.right
             verticalCenter: parent.verticalCenter
             leftMargin: 8; rightMargin: 8
           }
-          spacing: 2
+          spacing: 8
 
-          RowLayout {
-            spacing: 8
-
-            BusyIndicator {
-              running: bridgeManager.busy
-              visible: bridgeManager.busy
-              width: 16; height: 16
-            }
-
-            Label {
-              text: bridgeManager.statusText
-              font.pixelSize: 11
-              color: bridgeManager.worldName.length > 0 ? "#1b5e20" : "#b71c1c"
-              wrapMode: Text.Wrap; Layout.fillWidth: true
-            }
-
-            Label {
-              visible: bridgeManager.lastRefreshTime.length > 0
-              text: "↻ " + bridgeManager.lastRefreshTime
-              font.pixelSize: 10; color: "#558b2f"
-            }
-          }
-        }
-      }
-
-      // ── 3. Model-gone warning ─────────────────────────────────────
-      Rectangle {
-        Layout.leftMargin: 10; Layout.rightMargin: 10
-        Layout.fillWidth: true
-        implicitHeight: modelGoneLabel.implicitHeight + 12
-        color: "#fff3e0"
-        border.color: "#ef6c00"; border.width: 1
-        radius: 4
-        visible: bridgeManager.modelGoneWarning.length > 0
-
-        Label {
-          id: modelGoneLabel
-          anchors {
-            top: parent.top; left: parent.left; right: parent.right
-            topMargin: 6; leftMargin: 8; rightMargin: 8
-          }
-          text: "⚠ " + bridgeManager.modelGoneWarning
-          font.pixelSize: 10; color: "#bf360c"
-          wrapMode: Text.Wrap
-        }
-      }
-
-      // ── 4. Model selector + ECM status ────────────────────────────
-      Rectangle {
-        visible: bridgeManager.modelNames.length > 0 ||
-                 bridgeManager.selectedModel.length > 0
-        Layout.leftMargin: 10; Layout.rightMargin: 10
-        Layout.fillWidth: true
-        implicitHeight: modelCol.implicitHeight + 16
-        color: "#fafafa"
-        border.color: "#e0e0e0"; border.width: 1
-        radius: 4
-
-        ColumnLayout {
-          id: modelCol
-          anchors {
-            top: parent.top; left: parent.left; right: parent.right
-            topMargin: 8; leftMargin: 8; rightMargin: 8
-          }
-          spacing: 4
-
-          RowLayout {
-            spacing: 6; Layout.fillWidth: true
-
-            Label { text: "Model:"; font.bold: true; font.pixelSize: 12; color: "#555" }
-
-            ComboBox {
-              id: modelCombo
-              Layout.fillWidth: true
-              font.pixelSize: 11
-              model: ["(no model — manual selection)"].concat(bridgeManager.modelNames)
-
-              currentIndex: {
-                var idx = bridgeManager.modelNames.indexOf(bridgeManager.selectedModel)
-                return idx >= 0 ? idx + 1 : 0
-              }
-
-              onActivated: {
-                var name = (currentIndex === 0) ? "" : bridgeManager.modelNames[currentIndex - 1]
-                bridgeManager.selectModel(name)
-              }
-
-              Connections {
-                target: bridgeManager
-                function onSelectedModelChanged() {
-                  var idx = bridgeManager.modelNames.indexOf(bridgeManager.selectedModel)
-                  modelCombo.currentIndex = (idx >= 0) ? idx + 1 : 0
-                }
-              }
-            }
-
-            Button {
-              text: "Reset"; font.pixelSize: 10
-              implicitWidth: 56; implicitHeight: 24
-              ToolTip.visible: hovered
-              ToolTip.text: "Reset this model's manual selections to heuristic defaults"
-              ToolTip.delay: 400
-              onClicked: bridgeManager.resetCurrentModelSelection()
-            }
-          }
-
-          // ECM discovery status (compact inline indicator)
-          RowLayout {
-            Layout.fillWidth: true
-            spacing: 6
-
-            Rectangle {
-              width: 8; height: 8; radius: 4
-              color: bridgeManager.ecmAvailable ? "#43a047" : "#bdbdbd"
-            }
-
-            Label {
-              text: bridgeManager.ecmAvailable
-                    ? ("Sensor discovery: ECM active  •  " +
-                       bridgeManager.sensorDiscoveryStatus)
-                    : "Sensor discovery: ECM unavailable — using topic-name heuristic"
-              font.pixelSize: 10
-              color: bridgeManager.ecmAvailable ? "#2e7d32" : "#757575"
-              wrapMode: Text.Wrap; Layout.fillWidth: true
-            }
+          BusyIndicator {
+            running: bridgeManager.busy
+            visible: bridgeManager.busy
+            width: 16; height: 16
           }
 
           Label {
-            visible: bridgeManager.warnings.length > 0
-            text: "⚠ " + bridgeManager.warnings.join("\n⚠ ")
-            font.pixelSize: 10; color: "#b71c1c"
+            text: bridgeManager.statusText
+            font.pixelSize: 11
+            color: bridgeManager.worldName.length > 0 ? "#1b5e20" : "#b71c1c"
             wrapMode: Text.Wrap; Layout.fillWidth: true
           }
 
           Label {
-            text: topicCountLabel()
-            font.pixelSize: 10; color: "#616161"
-          }
-
-          Label {
-            text: "Selections are remembered per model during this session."
-            font.pixelSize: 9; font.italic: true; color: "#9e9e9e"
+            visible: bridgeManager.lastRefreshTime.length > 0
+            text: "↻ " + bridgeManager.lastRefreshTime
+            font.pixelSize: 10; color: "#558b2f"
           }
         }
       }
 
-      // ── 5. Detected sensors in selected model (ECM sensorTree) ────
+      // ── 3. Global warnings ────────────────────────────────────────
       Rectangle {
-        id: ecmCard
         Layout.leftMargin: 10; Layout.rightMargin: 10
         Layout.fillWidth: true
-        implicitHeight: ecmCol.implicitHeight + 16
-        color: "#e8f5e9"
-        border.color: "#43a047"; border.width: 1
-        radius: 4
-        visible: bridgeManager.ecmAvailable && bridgeManager.sensorTree.length > 0
+        implicitHeight: globalWarnLabel.implicitHeight + 12
+        color: "#fff3e0"; border.color: "#ef6c00"; border.width: 1; radius: 4
+        visible: bridgeManager.warnings.length > 0
 
-        property bool expanded: true
-
-        ColumnLayout {
-          id: ecmCol
+        Label {
+          id: globalWarnLabel
           anchors {
             top: parent.top; left: parent.left; right: parent.right
-            topMargin: 8; leftMargin: 8; rightMargin: 8
+            topMargin: 6; leftMargin: 8; rightMargin: 8
           }
-          spacing: 4
+          text: "⚠ " + bridgeManager.warnings.join("\n⚠ ")
+          font.pixelSize: 10; color: "#bf360c"; wrapMode: Text.Wrap
+        }
+      }
 
-          // Section header with collapse toggle
-          Item {
-            Layout.fillWidth: true
-            implicitHeight: ecmHeader.implicitHeight + 4
+      // ── 4. Model accordion cards ──────────────────────────────────
+      Repeater {
+        model: root.visibleCards
 
-            Label {
-              id: ecmHeader
-              text: (ecmCard.expanded ? "▼" : "▶") +
-                    "  Detected sensors in selected model  (" +
-                    bridgeManager.sensorTree.length + ")"
-              font.bold: true; font.pixelSize: 12; color: "#1b5e20"
+        delegate: Rectangle {
+          id: modelCard
+          Layout.leftMargin: 10; Layout.rightMargin: 10
+          Layout.fillWidth: true
+          implicitHeight: modelCardCol.implicitHeight + 16
+          color: "#fafafa"
+          border.color: "#e0e0e0"; border.width: 1
+          radius: 4
+
+          // Save outer modelData before inner Repeaters shadow it.
+          property var  cardData: modelData
+          property bool expanded: false
+
+          ColumnLayout {
+            id: modelCardCol
+            anchors {
+              top: parent.top; left: parent.left; right: parent.right
+              topMargin: 8; leftMargin: 8; rightMargin: 8
             }
-            MouseArea {
-              anchors.fill: parent
-              cursorShape: Qt.PointingHandCursor
-              onClicked: ecmCard.expanded = !ecmCard.expanded
-            }
-          }
+            spacing: 4
 
-          // Per-sensor rows
-          Repeater {
-            model: ecmCard.expanded ? bridgeManager.sensorTree : []
-
-            delegate: Rectangle {
-              id: sensorCard
+            // Card header — click anywhere to expand / collapse.
+            Item {
               Layout.fillWidth: true
-              implicitHeight: sensorCol.implicitHeight + 10
-              color: modelData.resolved ? "#f1f8e9" : "#fff8e1"
-              radius: 3
-              border.color: modelData.resolved ? "#a5d6a7" : "#ffe082"
-              border.width: 1
+              implicitHeight: cardHeaderRow.implicitHeight + 4
 
-              // Pin outer modelData to a named property so inner Repeaters can reach it.
-              property var sensorData: modelData
+              RowLayout {
+                id: cardHeaderRow
+                anchors { left: parent.left; right: parent.right }
+                spacing: 6
 
-              ColumnLayout {
-                id: sensorCol
-                anchors {
-                  left: parent.left; right: parent.right; top: parent.top
-                  leftMargin: 6; rightMargin: 6; topMargin: 4
+                Label {
+                  text: (modelCard.expanded ? "▼" : "▶") + "  " +
+                        modelCard.cardData.modelName
+                  font.bold: true; font.pixelSize: 12; color: "#212121"
+                  Layout.fillWidth: true; elide: Text.ElideRight
                 }
-                spacing: 2
 
-                // Identity: link / sensor  [type]  [nested?]
-                RowLayout {
-                  Layout.fillWidth: true
-                  spacing: 4
-
-                  Label {
-                    text: sensorCard.sensorData.linkName + " / " +
-                          sensorCard.sensorData.sensorName
-                    font.pixelSize: 10; font.bold: true; font.family: "monospace"
-                    color: "#1b5e20"
-                    Layout.fillWidth: true; elide: Text.ElideRight
-                  }
-
-                  Label {
-                    text: sensorCard.sensorData.sensorType
-                    font.pixelSize: 9; font.italic: true; color: "#388e3c"
-                  }
-
-                  Label {
-                    visible: sensorCard.sensorData.nestedModel
-                    text: "nested"
-                    font.pixelSize: 8; font.italic: true; color: "#1565c0"
+                // ECM dot — green if sensors found, grey otherwise.
+                Rectangle {
+                  width: 8; height: 8; radius: 4
+                  color: modelCard.cardData.ecmAvailable ? "#43a047" : "#bdbdbd"
+                  ToolTip.visible: dotHover.containsMouse
+                  ToolTip.text: modelCard.cardData.ecmAvailable
+                                ? modelCard.cardData.ecmSensorCount + " ECM sensor(s)"
+                                : "No ECM sensors detected"
+                  ToolTip.delay: 400
+                  MouseArea {
+                    id: dotHover; anchors.fill: parent
+                    hoverEnabled: true; acceptedButtons: Qt.NoButton
                   }
                 }
 
-                // Match source
                 Label {
-                  visible: sensorCard.sensorData.resolved
-                  text: "source: " + root.matchSourceLabel(sensorCard.sensorData.matchSource)
-                  font.pixelSize: 9; font.italic: true
-                  color: root.matchSourceColor(sensorCard.sensorData.matchSource)
-                }
-
-                // Topic prefix — declared topic takes priority over fallback
-                Label {
-                  visible: sensorCard.sensorData.declaredTopic.length > 0
-                  text: "topic: " + sensorCard.sensorData.declaredTopic
-                  font.pixelSize: 9; font.family: "monospace"; color: "#424242"
-                  Layout.fillWidth: true; elide: Text.ElideMiddle
-                  ToolTip.visible: dtHover.containsMouse
-                  ToolTip.text: sensorCard.sensorData.declaredTopic
-                  ToolTip.delay: 300
-                  MouseArea { id: dtHover; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
-                }
-                Label {
-                  visible: sensorCard.sensorData.declaredTopic.length === 0 &&
-                           sensorCard.sensorData.fallbackPrefix.length > 0
-                  text: "path: " + sensorCard.sensorData.fallbackPrefix
-                  font.pixelSize: 9; font.family: "monospace"; color: "#616161"
-                  Layout.fillWidth: true; elide: Text.ElideMiddle
-                  ToolTip.visible: fpHover.containsMouse
-                  ToolTip.text: sensorCard.sensorData.fallbackPrefix
-                  ToolTip.delay: 300
-                  MouseArea { id: fpHover; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
-                }
-
-                // Matched topic rows (checkbox + topic + gz→ros2 types)
-                Repeater {
-                  model: sensorCard.sensorData.matchedTopicDetails
-
-                  delegate: RowLayout {
-                    id: tdRow
-                    Layout.fillWidth: true
-                    Layout.leftMargin: 8
-                    spacing: 3
-
-                    // Look up live check/bridgeable state from associatedTopics.
-                    // This binding re-evaluates whenever associatedTopics changes (topicsChanged).
-                    property string tdTopic: modelData.topic
-                    property bool tdChecked: {
-                      var t = tdRow.tdTopic;
-                      var list = bridgeManager.associatedTopics;
-                      for (var i = 0; i < list.length; i++) {
-                        if (list[i].topic === t) return list[i].checked;
-                      }
-                      return false;
-                    }
-                    property bool tdBridgeable: {
-                      var t = tdRow.tdTopic;
-                      var list = bridgeManager.associatedTopics;
-                      for (var i = 0; i < list.length; i++) {
-                        if (list[i].topic === t) return list[i].bridgeable;
-                      }
-                      return true;
-                    }
-
-                    CheckBox {
-                      padding: 0
-                      Layout.preferredWidth: 22
-                      Layout.alignment: Qt.AlignVCenter
-                      checked: tdRow.tdChecked
-                      enabled: tdRow.tdBridgeable
-                      onToggled: bridgeManager.setTopicChecked(tdRow.tdTopic, checked)
-                    }
-
-                    Label {
-                      text: modelData.topic
-                      font.pixelSize: 9; font.family: "monospace"; color: "#33691e"
-                      Layout.fillWidth: true; elide: Text.ElideMiddle
-                      ToolTip.visible: tdHover.containsMouse
-                      ToolTip.text: modelData.topic
-                      ToolTip.delay: 300
-                      MouseArea { id: tdHover; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
-                    }
-
-                    Label {
-                      text: modelData.gzType.replace("gz.msgs.", "")
-                      font.pixelSize: 8; color: "#1565c0"
-                      elide: Text.ElideRight; Layout.preferredWidth: 72
-                    }
-
-                    Label { text: "→"; font.pixelSize: 8; color: "#9e9e9e" }
-
-                    Label {
-                      text: {
-                        var parts = modelData.ros2Type.split("/");
-                        return parts.length > 0 ? parts[parts.length - 1] : modelData.ros2Type;
-                      }
-                      font.pixelSize: 8; color: "#5d4037"
-                      elide: Text.ElideRight; Layout.preferredWidth: 80
-                    }
+                  text: {
+                    var sel = modelCard.cardData.selectedTopicCount
+                    return sel + " selected"
                   }
+                  font.pixelSize: 10; color: "#616161"
                 }
 
-                // Unresolved warning
-                Label {
-                  visible: !sensorCard.sensorData.resolved &&
-                            sensorCard.sensorData.warning.length > 0
-                  text: "⚠ " + sensorCard.sensorData.warning
-                  font.pixelSize: 9; font.italic: true; color: "#bf360c"
-                  wrapMode: Text.Wrap; Layout.fillWidth: true
+                Button {
+                  text: "Reset"; font.pixelSize: 9
+                  implicitWidth: 48; implicitHeight: 22
+                  ToolTip.visible: hovered
+                  ToolTip.text: "Reset this model's selections to ECM defaults"
+                  ToolTip.delay: 400
+                  onClicked: bridgeManager.resetModelSelection(modelCard.cardData.modelName)
                 }
+              }
 
-                Item { implicitHeight: 2 }
+              MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                onClicked: modelCard.expanded = !modelCard.expanded
               }
             }
-          }
-        }
-      }
 
-      // "No sensors for selected model" — ECM active but nothing found
+            // ---- Expanded body: ECM sensor cards --------------------
+
+            Repeater {
+              model: modelCard.expanded && modelCard.cardData.ecmSensorCount > 0
+                     ? modelCard.cardData.sensors : []
+
+              delegate: Rectangle {
+                id: sensorCard
+                Layout.fillWidth: true
+                implicitHeight: sensorCol.implicitHeight + 10
+                radius: 3
+                border.width: 1
+
+                // Pin outer modelData before the inner topic Repeater.
+                property var sensorData: modelData
+
+                // Strong ECM match → green; weak match → orange; unresolved → yellow.
+                property bool strongMatch: {
+                  var ms = sensorCard.sensorData.matchSource
+                  return ms === "ECM exact" || ms === "ECM prefix" || ms === "ECM path"
+                }
+
+                color:        strongMatch ? "#f1f8e9"
+                              : (sensorData.resolved ? "#fff3e0" : "#fff8e1")
+                border.color: strongMatch ? "#a5d6a7"
+                              : (sensorData.resolved ? "#ffcc80" : "#ffe082")
+
+                ColumnLayout {
+                  id: sensorCol
+                  anchors {
+                    left: parent.left; right: parent.right; top: parent.top
+                    leftMargin: 6; rightMargin: 6; topMargin: 4
+                  }
+                  spacing: 2
+
+                  // Identity: link / sensor  [type]  [nested?]
+                  RowLayout {
+                    Layout.fillWidth: true; spacing: 4
+
+                    Label {
+                      text: sensorCard.sensorData.linkName + " / " +
+                            sensorCard.sensorData.sensorName
+                      font.pixelSize: 10; font.bold: true; font.family: "monospace"
+                      color: "#1b5e20"; Layout.fillWidth: true; elide: Text.ElideRight
+                    }
+                    Label {
+                      text: sensorCard.sensorData.sensorType
+                      font.pixelSize: 9; font.italic: true; color: "#388e3c"
+                    }
+                    Label {
+                      visible: sensorCard.sensorData.nestedModel
+                      text: "nested"
+                      font.pixelSize: 8; font.italic: true; color: "#1565c0"
+                    }
+                  }
+
+                  // Match source
+                  Label {
+                    visible: sensorCard.sensorData.resolved
+                    text: "source: " + root.matchSourceLabel(sensorCard.sensorData.matchSource)
+                    font.pixelSize: 9; font.italic: true
+                    color: root.matchSourceColor(sensorCard.sensorData.matchSource)
+                  }
+
+                  // Declared topic or fallback path
+                  Label {
+                    visible: sensorCard.sensorData.declaredTopic.length > 0
+                    text: "topic: " + sensorCard.sensorData.declaredTopic
+                    font.pixelSize: 9; font.family: "monospace"; color: "#424242"
+                    Layout.fillWidth: true; elide: Text.ElideMiddle
+                    ToolTip.visible: dtHover.containsMouse
+                    ToolTip.text: sensorCard.sensorData.declaredTopic
+                    ToolTip.delay: 300
+                    MouseArea {
+                      id: dtHover; anchors.fill: parent
+                      hoverEnabled: true; acceptedButtons: Qt.NoButton
+                    }
+                  }
+                  Label {
+                    visible: sensorCard.sensorData.declaredTopic.length === 0 &&
+                             sensorCard.sensorData.fallbackPrefix.length > 0
+                    text: "path: " + sensorCard.sensorData.fallbackPrefix
+                    font.pixelSize: 9; font.family: "monospace"; color: "#616161"
+                    Layout.fillWidth: true; elide: Text.ElideMiddle
+                    ToolTip.visible: fpHover.containsMouse
+                    ToolTip.text: sensorCard.sensorData.fallbackPrefix
+                    ToolTip.delay: 300
+                    MouseArea {
+                      id: fpHover; anchors.fill: parent
+                      hoverEnabled: true; acceptedButtons: Qt.NoButton
+                    }
+                  }
+
+                  // Column header row for per-topic list
+                  RowLayout {
+                    visible: sensorCard.sensorData.matchedTopicDetails.length > 0
+                    Layout.fillWidth: true; Layout.leftMargin: 26; spacing: 3
+
+                    Label {
+                      text: "Gazebo topic"
+                      font.pixelSize: 8; font.bold: true; color: "#9e9e9e"
+                      Layout.fillWidth: true
+                    }
+                    Label {
+                      text: "gz → ros2 type"
+                      font.pixelSize: 8; font.bold: true; color: "#9e9e9e"
+                      Layout.preferredWidth: 155
+                    }
+                  }
+
+                  // Per-topic rows (checked state embedded in matchedTopicDetails)
+                  Repeater {
+                    model: sensorCard.sensorData.matchedTopicDetails
+
+                    delegate: RowLayout {
+                      id: tdRow
+                      Layout.fillWidth: true; Layout.leftMargin: 8; spacing: 3
+
+                      property string tdTopic: modelData.topic
+
+                      CheckBox {
+                        padding: 0
+                        Layout.preferredWidth: 22
+                        Layout.alignment: Qt.AlignVCenter
+                        checked: modelData.checked
+                        enabled: modelData.bridgeable
+                        onToggled: bridgeManager.setTopicChecked(
+                                       modelCard.cardData.modelName,
+                                       tdRow.tdTopic, checked)
+                      }
+
+                      Label {
+                        text: modelData.topic
+                        font.pixelSize: 9; font.family: "monospace"; color: "#33691e"
+                        Layout.fillWidth: true; elide: Text.ElideMiddle
+                        ToolTip.visible: tdHover.containsMouse
+                        ToolTip.text: modelData.topic; ToolTip.delay: 300
+                        MouseArea {
+                          id: tdHover; anchors.fill: parent
+                          hoverEnabled: true; acceptedButtons: Qt.NoButton
+                        }
+                      }
+
+                      Label {
+                        text: modelData.gzType.replace("gz.msgs.", "")
+                        font.pixelSize: 8; color: "#1565c0"
+                        elide: Text.ElideRight; Layout.preferredWidth: 72
+                      }
+
+                      Label { text: "→"; font.pixelSize: 8; color: "#9e9e9e" }
+
+                      Label {
+                        text: {
+                          var parts = modelData.ros2Type.split("/")
+                          return parts.length > 0 ? parts[parts.length - 1] : modelData.ros2Type
+                        }
+                        font.pixelSize: 8; color: "#5d4037"
+                        elide: Text.ElideRight; Layout.preferredWidth: 80
+                      }
+                    }
+                  }
+
+                  // Sensor warning — orange for weak match, red for truly unresolved.
+                  Label {
+                    visible: sensorCard.sensorData.warning.length > 0
+                    text: "⚠ " + sensorCard.sensorData.warning
+                    font.pixelSize: 9; font.italic: true
+                    color: sensorCard.sensorData.resolved ? "#e65100" : "#bf360c"
+                    wrapMode: Text.Wrap; Layout.fillWidth: true
+                  }
+
+                  Item { implicitHeight: 2 }
+                }
+              }
+            }
+
+            // ECM unavailable banner (inside card body, when model has no ECM data)
+            Rectangle {
+              Layout.fillWidth: true
+              implicitHeight: ecmUnavailLabel.implicitHeight + 10
+              color: "#fff8e1"; border.color: "#ffe082"; border.width: 1; radius: 3
+              visible: modelCard.expanded && !modelCard.cardData.ecmAvailable
+
+              Label {
+                id: ecmUnavailLabel
+                anchors {
+                  left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter
+                  leftMargin: 6; rightMargin: 6
+                }
+                text: "⚠ No ECM sensors detected for this model."
+                font.pixelSize: 10; color: "#f57f17"; wrapMode: Text.Wrap
+              }
+            }
+
+          }  // modelCardCol
+        }  // modelCard Rectangle
+      }  // Repeater visibleCards
+
+      // ── 5. Bridge command (collapsible, collapsed by default) ─────
       Rectangle {
+        id: cmdCard
         Layout.leftMargin: 10; Layout.rightMargin: 10
         Layout.fillWidth: true
-        implicitHeight: noSensorLabel.implicitHeight + 12
-        color: "#fff3e0"
-        border.color: "#ff8f00"; border.width: 1
-        radius: 4
-        visible: bridgeManager.ecmAvailable &&
-                 bridgeManager.selectedModel.length > 0 &&
-                 bridgeManager.sensorTree.length === 0
-
-        Label {
-          id: noSensorLabel
-          anchors {
-            left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter
-            leftMargin: 8; rightMargin: 8
-          }
-          text: "No sensors detected for selected model."
-          font.pixelSize: 10; font.italic: true; color: "#e65100"
-          wrapMode: Text.Wrap
-        }
-      }
-
-      // ECM unavailable banner (when model selected but ECM not active)
-      Rectangle {
-        Layout.leftMargin: 10; Layout.rightMargin: 10
-        Layout.fillWidth: true
-        implicitHeight: ecmUnavailLabel.implicitHeight + 12
-        color: "#fff8e1"
-        border.color: "#ffe082"; border.width: 1
-        radius: 4
-        visible: !bridgeManager.ecmAvailable &&
-                 bridgeManager.selectedModel.length > 0
-
-        Label {
-          id: ecmUnavailLabel
-          anchors {
-            left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter
-            leftMargin: 8; rightMargin: 8
-          }
-          text: "⚠ ECM sensor discovery unavailable. " +
-                "Falling back to topic-name heuristics."
-          font.pixelSize: 10; color: "#f57f17"
-          wrapMode: Text.Wrap
-        }
-      }
-
-      // ── 6. Bridge command ─────────────────────────────────────────
-      Rectangle {
-        Layout.leftMargin: 10; Layout.rightMargin: 10
-        Layout.fillWidth: true
-        implicitHeight: cmdCol.implicitHeight + 16
+        implicitHeight: cmdCardCol.implicitHeight + 16
         color: bridgeManager.bridgeCommand.length > 0 ? "#e8f5e9" : "#f5f5f5"
         border.color: bridgeManager.bridgeCommand.length > 0 ? "#66bb6a" : "#bdbdbd"
-        border.width: 1
-        radius: 4
+        border.width: 1; radius: 4
+
+        property bool expanded: false
 
         ColumnLayout {
-          id: cmdCol
+          id: cmdCardCol
           anchors {
             top: parent.top; left: parent.left; right: parent.right
             topMargin: 8; leftMargin: 8; rightMargin: 8
           }
           spacing: 6
 
-          RowLayout {
+          // Header row (always visible) — click label area to toggle.
+          Item {
             Layout.fillWidth: true
+            implicitHeight: cmdHeaderRow.implicitHeight
 
-            Label {
-              text: "Bridge command  •  " + bridgeManager.selectionSummary
-              font.bold: true; font.pixelSize: 12
-              color: bridgeManager.bridgeCommand.length > 0 ? "#1b5e20" : "#757575"
-              Layout.fillWidth: true; elide: Text.ElideRight
+            RowLayout {
+              id: cmdHeaderRow
+              anchors { left: parent.left; right: parent.right }
+              spacing: 6
+
+              Label {
+                text: {
+                  var n = bridgeManager.selectedBridgeTopicCount
+                  var arrow = cmdCard.expanded ? "▼" : "▶"
+                  return arrow + "  Bridge command  •  " + n + " topic" +
+                         (n === 1 ? "" : "s") + " selected"
+                }
+                font.bold: true; font.pixelSize: 12
+                color: bridgeManager.bridgeCommand.length > 0 ? "#1b5e20" : "#757575"
+                Layout.fillWidth: true; elide: Text.ElideRight
+              }
+
+              Button {
+                text: "Copy"; font.pixelSize: 11
+                implicitWidth: 56; implicitHeight: 26
+                enabled: bridgeManager.bridgeCommand.length > 0
+                onClicked: bridgeManager.copyBridgeCommand()
+              }
             }
 
-            Button {
-              text: "Copy"; font.pixelSize: 11
-              implicitWidth: 56; implicitHeight: 26
-              enabled: bridgeManager.bridgeCommand.length > 0
-              onClicked: bridgeManager.copyBridgeCommand()
-            }
-
-            Button {
-              text: "Uncheck"; font.pixelSize: 11
-              implicitWidth: 70; implicitHeight: 26
-              enabled: bridgeManager.checkedCurrentModelCount > 0
-              ToolTip.visible: hovered
-              ToolTip.text: "Uncheck all topics for the current model (stored as overrides)"
-              ToolTip.delay: 400
-              onClicked: bridgeManager.uncheckAllCurrentModel()
+            MouseArea {
+              anchors { left: parent.left; right: parent.right; top: parent.top; bottom: parent.bottom }
+              onClicked: cmdCard.expanded = !cmdCard.expanded
             }
           }
 
-          CheckBox {
-            text: "Include checked topics from all models"
-            font.pixelSize: 10; padding: 2
-            checked: bridgeManager.includeAllModels
-            onToggled: bridgeManager.setIncludeAllModels(checked)
-            ToolTip.visible: hovered
-            ToolTip.text: "Union of checked topics across every model you've curated in this world"
-            ToolTip.delay: 400
-          }
-
+          // Command display (shown when expanded)
           Rectangle {
+            visible: cmdCard.expanded
             Layout.fillWidth: true
             implicitHeight: bridgeManager.bridgeCommand.length > 0
                               ? Math.min(cmdLabel.implicitHeight + 10, 140) : 36
             color: bridgeManager.bridgeCommand.length > 0 ? "#f1f8e9" : "#fafafa"
             radius: 3
             border.color: bridgeManager.bridgeCommand.length > 0 ? "#a5d6a7" : "#e0e0e0"
-            border.width: 1
-            clip: true
+            border.width: 1; clip: true
 
             Flickable {
               anchors { fill: parent; margins: 5 }
@@ -669,48 +595,27 @@ Rectangle {
             Label {
               anchors.centerIn: parent
               visible: bridgeManager.bridgeCommand.length === 0
-              text: "No topics checked. Select a model or check topics below."
+              text: "No topics checked. Expand a model card above and check topics."
               font.pixelSize: 10; font.italic: true; color: "#9e9e9e"
+              wrapMode: Text.Wrap; horizontalAlignment: Text.AlignHCenter
             }
-          }
-
-          Label {
-            visible: bridgeManager.missingTopicsWarning.length > 0
-            text: "⚠ " + bridgeManager.missingTopicsWarning
-            font.pixelSize: 10; color: "#bf360c"
-            wrapMode: Text.Wrap; Layout.fillWidth: true
           }
         }
       }
 
-      // ── 7. Heuristic suggestions ──────────────────────────────────
-      // When ECM active: show only non-EcmConfirmed entries (collapsed).
-      // When ECM unavailable: show all associated topics (expanded).
+      // ── 6. Additional bridgeable topics (collapsed, unchecked by default) ─
       Rectangle {
-        id: assocCard
+        id: additionalCard
         Layout.leftMargin: 10; Layout.rightMargin: 10
         Layout.fillWidth: true
-        implicitHeight: assocCol.implicitHeight + 16
-        color: "#fafafa"
-        border.color: "#e0e0e0"; border.width: 1
-        radius: 4
+        implicitHeight: addCol.implicitHeight + 16
+        color: "#fffde7"; border.color: "#ffe082"; border.width: 1; radius: 4
+        visible: bridgeManager.additionalBridgeableTopics.length > 0
 
-        // Filter out ECM-confirmed entries when ECM is available; those are
-        // already shown with checkboxes in the sensorTree section above.
-        property var displayTopics: {
-          var list = bridgeManager.associatedTopics;
-          if (!list || !list.length) return [];
-          if (!bridgeManager.ecmAvailable) return list;
-          return list.filter(function(e) { return e.category !== "EcmConfirmed"; });
-        }
-
-        visible: displayTopics.length > 0
-
-        // Collapsed when ECM is active (secondary information); expanded otherwise.
-        property bool expanded: !bridgeManager.ecmAvailable
+        property bool expanded: false
 
         ColumnLayout {
-          id: assocCol
+          id: addCol
           anchors {
             top: parent.top; left: parent.left; right: parent.right
             topMargin: 8; leftMargin: 8; rightMargin: 8
@@ -719,126 +624,52 @@ Rectangle {
 
           Item {
             Layout.fillWidth: true
-            implicitHeight: assocHeader.implicitHeight + 4
+            implicitHeight: addHeader.implicitHeight + 4
 
             Label {
-              id: assocHeader
-              text: (assocCard.expanded ? "▼" : "▶") +
-                    "  Heuristic suggestions (" +
-                    assocCard.displayTopics.length + ")"
-              font.bold: true; font.pixelSize: 12; color: "#1b5e20"
-            }
-            MouseArea {
-              anchors.fill: parent
-              cursorShape: Qt.PointingHandCursor
-              onClicked: assocCard.expanded = !assocCard.expanded
-            }
-          }
-
-          RowLayout {
-            visible: assocCard.expanded
-            Layout.fillWidth: true
-
-            Label {
-              text: bridgeManager.ecmAvailable
-                    ? "Topics matched by topic-name heuristic (not ECM-confirmed)."
-                    : "Topics matched by topic-name heuristic. ECM not available."
-              font.pixelSize: 9; font.italic: true; color: "#616161"
-              wrapMode: Text.Wrap; Layout.fillWidth: true
-            }
-
-            Button {
-              text: "Check all"; font.pixelSize: 10
-              implicitWidth: 70; implicitHeight: 22
-              onClicked: bridgeManager.checkAllAssociated()
-            }
-          }
-
-          ListView {
-            visible: assocCard.expanded
-            Layout.fillWidth: true
-            implicitHeight: Math.min(count * 30, 240)
-            clip: true
-            interactive: true
-            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-
-            model: assocCard.displayTopics
-            delegate: TopicRow { entry: modelData; checkable: true }
-          }
-        }
-      }
-
-      // ── 8. Additional bridgeable topics ───────────────────────────
-      // Bridgeable topics that could not be confidently associated with
-      // the selected model. Previously labelled "Bridgeable but unassigned".
-      Rectangle {
-        id: unassignedCard
-        Layout.leftMargin: 10; Layout.rightMargin: 10
-        Layout.fillWidth: true
-        implicitHeight: unassnCol.implicitHeight + 16
-        color: "#fffde7"
-        border.color: "#ffe082"; border.width: 1
-        radius: 4
-        visible: bridgeManager.unassignedTopics.length > 0
-
-        property bool expanded: bridgeManager.selectedModel.length === 0
-
-        ColumnLayout {
-          id: unassnCol
-          anchors {
-            top: parent.top; left: parent.left; right: parent.right
-            topMargin: 8; leftMargin: 8; rightMargin: 8
-          }
-          spacing: 4
-
-          Item {
-            Layout.fillWidth: true
-            implicitHeight: unassnHeader.implicitHeight + 4
-
-            Label {
-              id: unassnHeader
-              text: (unassignedCard.expanded ? "▼" : "▶") +
+              id: addHeader
+              text: (additionalCard.expanded ? "▼" : "▶") +
                     "  Additional bridgeable topics (" +
-                    bridgeManager.unassignedTopics.length + ")"
+                    bridgeManager.additionalBridgeableTopics.length + ")"
               font.bold: true; font.pixelSize: 12; color: "#e65100"
             }
             MouseArea {
-              anchors.fill: parent
-              cursorShape: Qt.PointingHandCursor
-              onClicked: unassignedCard.expanded = !unassignedCard.expanded
+              anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+              onClicked: additionalCard.expanded = !additionalCard.expanded
             }
           }
 
           Label {
-            visible: unassignedCard.expanded
-            text: "Bridgeable topics not linked to sensors in the selected model. " +
-                  "Generic topics (/clock, /scan, …) appear here by design."
+            visible: additionalCard.expanded
+            text: "Bridgeable topics not linked to any ECM sensor. All unchecked by default."
             font.pixelSize: 10; font.italic: true
             color: "#5d4037"; wrapMode: Text.Wrap; Layout.fillWidth: true
           }
 
           ListView {
-            visible: unassignedCard.expanded
+            visible: additionalCard.expanded
             Layout.fillWidth: true
             implicitHeight: Math.min(count * 30, 240)
             clip: true; interactive: true
             ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
-            model: bridgeManager.unassignedTopics
-            delegate: TopicRow { entry: modelData; checkable: true }
+            model: bridgeManager.additionalBridgeableTopics
+            delegate: TopicRow {
+              entry: modelData
+              modelName: ""   // → setAdditionalTopicChecked
+              checkable: true
+            }
           }
         }
       }
 
-      // ── 9. Unsupported / debug topics (collapsed) ─────────────────
+      // ── 7. Unsupported / debug topics (collapsed) ─────────────────
       Rectangle {
         id: unsupCard
         Layout.leftMargin: 10; Layout.rightMargin: 10
         Layout.fillWidth: true
         implicitHeight: unsupCol.implicitHeight + 16
-        color: "#fafafa"
-        border.color: "#e0e0e0"; border.width: 1
-        radius: 4
+        color: "#fafafa"; border.color: "#e0e0e0"; border.width: 1; radius: 4
         visible: bridgeManager.unsupportedTopics.length > 0
 
         property bool expanded: false
@@ -863,8 +694,7 @@ Rectangle {
               font.bold: true; font.pixelSize: 12; color: "#757575"
             }
             MouseArea {
-              anchors.fill: parent
-              cursorShape: Qt.PointingHandCursor
+              anchors.fill: parent; cursorShape: Qt.PointingHandCursor
               onClicked: unsupCard.expanded = !unsupCard.expanded
             }
           }
@@ -882,7 +712,7 @@ Rectangle {
         }
       }
 
-      // ── 10. Empty state ────────────────────────────────────────────
+      // ── 8. Empty state ─────────────────────────────────────────────
       Rectangle {
         Layout.leftMargin: 10; Layout.rightMargin: 10
         Layout.fillWidth: true
@@ -890,8 +720,8 @@ Rectangle {
         color: "#f5f5f5"; radius: 4
         visible: !bridgeManager.busy &&
                  bridgeManager.worldName.length === 0 &&
-                 bridgeManager.unsupportedTopics.length === 0 &&
-                 !bridgeManager.hasBridgeableTopics
+                 bridgeManager.modelCards.length === 0 &&
+                 bridgeManager.additionalBridgeableTopics.length === 0
 
         Label {
           id: emptyLabel

@@ -12,10 +12,10 @@
 
 #include <gz/sim/EntityComponentManager.hh>
 
-#include "gz_ros2_bridge_manager/BridgeSession.hh"
+#include "gz_ros2_bridge_manager/BridgeCommandBuilder.hh"
 #include "gz_ros2_bridge_manager/EcmSensorDiscovery.hh"
 #include "gz_ros2_bridge_manager/EcmSensorExtractor.hh"
-#include "gz_ros2_bridge_manager/ModelSensorDiscovery.hh"
+#include "gz_ros2_bridge_manager/TopicAssociationHeuristic.hh"  // isGenericTopic static helper
 #include "gz_ros2_bridge_manager/WorldDiscovery.hh"
 
 // Q_INIT_RESOURCE must live outside any namespace.
@@ -30,7 +30,8 @@ namespace gz_ros2_bridge_manager
 namespace
 {
 
-constexpr int kAutoRefreshIntervalMs = 2500;
+constexpr int  kAutoRefreshIntervalMs = 2500;
+constexpr const char *kAdditionalMarker = "__additional__";
 
 // ---- QML helpers --------------------------------------------------------
 
@@ -51,15 +52,6 @@ QVariantMap toVariantMap(const BridgeTopicCandidate &c)
   return m;
 }
 
-QVariantList toVariantList(const std::vector<BridgeTopicCandidate> &cs)
-{
-  QVariantList list;
-  list.reserve(static_cast<int>(cs.size()));
-  for (const auto &c : cs)
-    list.append(toVariantMap(c));
-  return list;
-}
-
 QVariantMap sensorToVariantMap(const DiscoveredSensor &ds)
 {
   QVariantMap m;
@@ -75,12 +67,14 @@ QVariantMap sensorToVariantMap(const DiscoveredSensor &ds)
   m[QStringLiteral("warning")]       = QString::fromStdString(ds.warning);
   m[QStringLiteral("topicCount")]    = static_cast<int>(ds.matchedTopicNames.size());
 
-  // Per-topic detail entries (topic + parsed gz/ros2 types from bridge spec).
+  // Per-topic detail entries — checked/bridgeable filled in buildModelCard.
   QVariantList topicDetails;
   for (size_t i = 0; i < ds.matchedTopicNames.size(); ++i)
   {
     QVariantMap td;
-    td[QStringLiteral("topic")] = QString::fromStdString(ds.matchedTopicNames[i]);
+    td[QStringLiteral("topic")]      = QString::fromStdString(ds.matchedTopicNames[i]);
+    td[QStringLiteral("checked")]    = false;   // overwritten in buildModelCard
+    td[QStringLiteral("bridgeable")] = true;    // overwritten in buildModelCard
 
     QString gzType, ros2Type;
     if (i < ds.matchedBridgeSpecs.size())
@@ -103,7 +97,6 @@ QVariantMap sensorToVariantMap(const DiscoveredSensor &ds)
   }
   m[QStringLiteral("matchedTopicDetails")] = topicDetails;
 
-  // Keep a plain string list for backward compatibility.
   QStringList topicNames;
   for (const auto &s : ds.matchedTopicNames)
     topicNames << QString::fromStdString(s);
@@ -113,7 +106,8 @@ QVariantMap sensorToVariantMap(const DiscoveredSensor &ds)
 }
 
 // Build BridgeTopicCandidate entries from ECM-matched sensor topics.
-// Topics already covered by ECM are excluded from the heuristic below.
+// Strong matches (ECM exact/prefix/standard) are checked by default.
+// Weak matches (NameMatch, TypeCompatibleFallback) are unchecked by default.
 std::vector<BridgeTopicCandidate> ecmToCandidates(
     const ModelSensorTree &tree,
     const BridgeTypeMapper & /*mapper*/,
@@ -124,6 +118,12 @@ std::vector<BridgeTopicCandidate> ecmToCandidates(
 
   for (const auto &ds : tree.sensors)
   {
+    // Strong match = auto-checked; weak match = unchecked by default.
+    const bool strongMatch =
+        (ds.matchSource == MatchSource::EcmSensorTopicExact  ||
+         ds.matchSource == MatchSource::EcmSensorTopicPrefix ||
+         ds.matchSource == MatchSource::EcmStandardPrefix);
+
     for (size_t i = 0; i < ds.matchedTopicNames.size(); ++i)
     {
       const auto &topicName = ds.matchedTopicNames[i];
@@ -137,12 +137,12 @@ std::vector<BridgeTopicCandidate> ecmToCandidates(
       c.gzTopic    = topicName;
       c.bridgeSpec = spec;
       c.bridgeable = true;
-      c.checked    = true;  // ECM-confirmed → checked by default
+      c.checked    = strongMatch;   // weak matches start unchecked
       c.category   = AssociationCategory::EcmConfirmed;
-      c.confidenceLabel = "ECM confirmed";
+      c.confidenceLabel = std::string(matchSourceName(ds.matchSource));
       c.isGeneric  = false;
+      c.warning    = ds.warning;
 
-      // Parse gz type and ros2 type from bridge spec (<topic>@<ros2type>@<gztype>)
       const auto at1 = spec.find('@');
       if (at1 != std::string::npos)
       {
@@ -153,16 +153,13 @@ std::vector<BridgeTopicCandidate> ecmToCandidates(
           c.gzType   = spec.substr(at2 + 1);
         }
       }
-
-      c.warning = ds.warning;
       result.push_back(std::move(c));
     }
 
-    // Unresolved sensor: emit one placeholder so the sensor is visible.
+    // Truly unresolved sensor: placeholder so the sensor row remains visible.
     if (!ds.resolved)
     {
       BridgeTopicCandidate c;
-      // Use fallback prefix if available, otherwise the declared topic.
       c.gzTopic = !ds.sensor.declaredTopic.empty()
                     ? ds.sensor.declaredTopic
                     : ds.sensor.fallbackGazeboTopicPrefix;
@@ -220,7 +217,6 @@ void Ros2BridgeManagerGui::Update(const gz::sim::UpdateInfo & /*_info*/,
       return;
   }
 
-  // Fingerprint changed — do full extraction without holding the lock.
   std::vector<EcmSensorEntry> newSensors = EcmSensorExtractor::extract(_ecm);
 
   gzdbg << "[BridgeManager] ECM sensor state changed: "
@@ -250,27 +246,6 @@ void Ros2BridgeManagerGui::Update(const gz::sim::UpdateInfo & /*_info*/,
 // Helpers
 // ============================================================================
 
-std::string Ros2BridgeManagerGui::currentKey() const
-{
-  const std::string world = worldName_.toStdString();
-  if (selectedModel_.isEmpty())
-    return ModelTopicSelectionStore::manualKey(world);
-  return ModelTopicSelectionStore::keyForModel(
-      world, selectedModel_.toStdString());
-}
-
-bool Ros2BridgeManagerGui::hasBridgeableTopics() const
-{
-  return !associatedCands_.empty() || !unassignedCands_.empty();
-}
-
-QString Ros2BridgeManagerGui::sensorNote() const
-{
-  if (ecmAvailable_)
-    return QStringLiteral("Sensor hierarchy confirmed via ECM.");
-  return QString::fromStdString(ModelSensorDiscovery::unavailableReason());
-}
-
 void Ros2BridgeManagerGui::setStatus(const QString &text)
 {
   if (statusText_ == text) return;
@@ -279,186 +254,204 @@ void Ros2BridgeManagerGui::setStatus(const QString &text)
 }
 
 // ============================================================================
-// Recompute pipelines
+// Build one model accordion card
+// ============================================================================
+
+QVariantMap Ros2BridgeManagerGui::buildModelCard(
+    const std::string &modelName,
+    const ModelSensorTree &tree,
+    const std::vector<BridgeTopicCandidate> &cands)
+{
+  // topic → {checked, bridgeable} lookup for embedding state into sensor rows.
+  std::unordered_map<std::string, std::pair<bool, bool>> topicState;
+  for (const auto &c : cands)
+    topicState[c.gzTopic] = {c.checked, c.bridgeable};
+
+  QVariantMap card;
+  card[QStringLiteral("modelName")] = QString::fromStdString(modelName);
+
+  const bool ecmActive = !tree.sensors.empty();
+  int unresolvedCount  = 0;
+  for (const auto &ds : tree.sensors)
+    if (!ds.resolved) ++unresolvedCount;
+
+  card[QStringLiteral("ecmAvailable")]          = ecmActive;
+  card[QStringLiteral("ecmSensorCount")]         = static_cast<int>(tree.sensors.size());
+  card[QStringLiteral("unresolvedSensorCount")]  = unresolvedCount;
+
+  // Sensor list with per-topic checked/bridgeable state embedded.
+  QVariantList sensors;
+  for (const auto &ds : tree.sensors)
+  {
+    QVariantMap sm = sensorToVariantMap(ds);
+    QVariantList enriched;
+    for (const auto &tdVar : sm[QStringLiteral("matchedTopicDetails")].toList())
+    {
+      QVariantMap td = tdVar.toMap();
+      const std::string topic = td[QStringLiteral("topic")].toString().toStdString();
+      auto it = topicState.find(topic);
+      if (it != topicState.end())
+      {
+        td[QStringLiteral("checked")]    = it->second.first;
+        td[QStringLiteral("bridgeable")] = it->second.second;
+      }
+      enriched.append(td);
+    }
+    sm[QStringLiteral("matchedTopicDetails")] = enriched;
+    sensors.append(sm);
+  }
+  card[QStringLiteral("sensors")] = sensors;
+
+  // Count selected topics.
+  int selected = 0;
+  for (const auto &c : cands)
+    if (c.checked && c.bridgeable) ++selected;
+  card[QStringLiteral("selectedTopicCount")] = selected;
+
+  return card;
+}
+
+// ============================================================================
+// Recompute pipeline — ECM-first, no per-model heuristic
 // ============================================================================
 
 void Ros2BridgeManagerGui::recomputeAndPublish()
 {
-  // ---- Grab ECM snapshot (thread-safe copy) --------------------------------
+  // 1. ECM snapshot (thread-safe copy).
   std::vector<EcmSensorEntry> ecmSensors;
   {
     std::lock_guard<std::mutex> lk(ecmMutex_);
     ecmSensors = ecmSensors_;
   }
 
-  // ---- ECM status counters ------------------------------------------------
-  {
-    std::unordered_set<EntityId> modelIds;
-    for (const auto &s : ecmSensors)
-      if (s.modelEntity != 0) modelIds.insert(s.modelEntity);
-    ecmModelCount_  = static_cast<int>(modelIds.size());
-    ecmSensorCount_ = static_cast<int>(ecmSensors.size());
-  }
-
-  // ---- ECM-confirmed sensor matching for selected model -------------------
   const std::string world = worldName_.toStdString();
-  const std::string model = selectedModel_.toStdString();
 
-  ModelSensorTree sensorTree = EcmTopicMatcher::matchAll(
-      world, ecmSensors, model, discoveredTopics_);
+  // 2. Per-model: ECM match + candidate building.
+  perModelCands_.clear();
+  perModelTrees_.clear();
+  warnings_.clear();
 
-  // Count per-selection stats.
-  int matchedTopics  = 0;
-  int unresolvedSensors = 0;
-  for (const auto &ds : sensorTree.sensors)
+  std::unordered_set<std::string> globalCovered;
+
+  for (const auto &modelName : discoveredModels_)
   {
-    matchedTopics += static_cast<int>(ds.matchedTopicNames.size());
-    if (!ds.resolved) ++unresolvedSensors;
+    ModelSensorTree tree = EcmTopicMatcher::matchAll(
+        world, ecmSensors, modelName, discoveredTopics_);
+
+    std::unordered_set<std::string> modelCovered;
+    std::vector<BridgeTopicCandidate> modelCands =
+        ecmToCandidates(tree, mapper_, modelCovered);
+    globalCovered.insert(modelCovered.begin(), modelCovered.end());
+
+    const std::string key = ModelTopicSelectionStore::keyForModel(world, modelName);
+    store_.applyOverrides(key, modelCands);
+
+    perModelCands_[modelName] = std::move(modelCands);
+    perModelTrees_[modelName] = std::move(tree);
   }
-  selectedModelSensorCount_           = static_cast<int>(sensorTree.sensors.size());
-  selectedModelMatchedTopicCount_     = matchedTopics;
-  selectedModelUnresolvedSensorCount_ = unresolvedSensors;
 
-  // Build sensorDiscoveryStatus string.
-  if (ecmSensors.empty())
+  // 3. Additional bridgeable topics — all bridgeable topics not covered by any
+  //    ECM sensor match (strong or weak).
+  additionalCands_.clear();
+  unsupportedCands_.clear();
+
+  const std::string addKey = world + "::" + kAdditionalMarker;
+
+  for (const auto &entry : discoveredTopics_)
   {
-    sensorDiscoveryStatus_ = QStringLiteral("No sensors detected in ECM");
-  }
-  else
-  {
-    sensorDiscoveryStatus_ =
-        QString("%1 sensor%2 across %3 model%4")
-            .arg(ecmSensorCount_)
-            .arg(ecmSensorCount_ == 1 ? "" : "s")
-            .arg(ecmModelCount_)
-            .arg(ecmModelCount_ == 1 ? "" : "s");
-    if (!model.empty())
+    if (globalCovered.count(entry.topicName) > 0)
+      continue;
+
+    if (entry.bridgeable && !entry.bridgeSpec.empty())
     {
-      sensorDiscoveryStatus_ +=
-          QString(" — %1 in selection (%2 resolved, %3 unresolved)")
-              .arg(selectedModelSensorCount_)
-              .arg(selectedModelSensorCount_ - unresolvedSensors)
-              .arg(unresolvedSensors);
+      BridgeTopicCandidate c;
+      c.gzTopic    = entry.topicName;
+      c.gzType     = entry.gzMsgType;
+      c.ros2Type   = entry.ros2MsgType;
+      c.bridgeSpec = entry.bridgeSpec;
+      c.bridgeable = true;
+      c.checked    = false;  // additional topics unchecked by default
+      c.category   = AssociationCategory::CompatibleButUnassigned;
+      c.isGeneric  = TopicAssociationHeuristic::isGenericTopic(entry.topicName);
+      additionalCands_.push_back(std::move(c));
+    }
+    else if (!entry.bridgeable)
+    {
+      BridgeTopicCandidate c;
+      c.gzTopic    = entry.topicName;
+      c.gzType     = entry.gzMsgType;
+      c.bridgeable = false;
+      c.checked    = false;
+      c.category   = AssociationCategory::Unsupported;
+      unsupportedCands_.push_back(std::move(c));
     }
   }
 
-  // Topics already claimed by ECM — excluded from heuristic below.
-  std::unordered_set<std::string> coveredTopics;
-  std::vector<BridgeTopicCandidate> ecmCands =
-      ecmToCandidates(sensorTree, mapper_, coveredTopics);
+  store_.applyOverrides(addKey, additionalCands_);
 
-  // Apply store overrides to ECM candidates (respect user's unchecks).
-  const std::string key = currentKey();
-  store_.applyOverrides(key, ecmCands);
-
-  ecmAvailable_ = !sensorTree.sensors.empty();
-
-  // Build sensorTree QML view.
-  sensorTree_.clear();
-  for (const auto &ds : sensorTree.sensors)
-    sensorTree_.append(sensorToVariantMap(ds));
-
-  // ---- Heuristic for topics not covered by ECM ----------------------------
-  auto result = heuristic_.associate(
-      model, world, discoveredTopics_, discoveredModels_);
-
-  // Remove topics already in ECM from heuristic results.
-  auto filterCovered = [&](std::vector<BridgeTopicCandidate> &cs)
-  {
-    cs.erase(
-      std::remove_if(cs.begin(), cs.end(),
-        [&](const BridgeTopicCandidate &c) {
-          return coveredTopics.count(c.gzTopic) > 0;
-        }),
-      cs.end());
-  };
-  filterCovered(result.associated);
-  filterCovered(result.unassigned);
-
-  store_.applyOverrides(key, result.associated);
-  store_.applyOverrides(key, result.unassigned);
-
-  // ---- Merge: ECM-confirmed first, then heuristic -------------------------
-  associatedCands_.clear();
-  associatedCands_.insert(associatedCands_.end(),
-                          ecmCands.begin(), ecmCands.end());
-  associatedCands_.insert(associatedCands_.end(),
-                          result.associated.begin(), result.associated.end());
-
-  unassignedCands_  = std::move(result.unassigned);
-  unsupportedCands_ = std::move(result.unsupported);
-
-  associatedView_  = toVariantList(associatedCands_);
-  unassignedView_  = toVariantList(unassignedCands_);
-  unsupportedView_ = toVariantList(unsupportedCands_);
-
-  warnings_.clear();
-  for (const auto &w : result.warnings)
-    warnings_ << QString::fromStdString(w);
-
-  emit topicsChanged();
-
-  rebuildSession();
+  // 4. Rebuild QML views.
+  rebuildModelCards();
+  rebuildBridgeCommand();
 }
 
-void Ros2BridgeManagerGui::rebuildSession()
+void Ros2BridgeManagerGui::rebuildModelCards()
 {
-  std::vector<BridgeTopicCandidate> currentCands;
-  currentCands.reserve(associatedCands_.size() + unassignedCands_.size());
-  currentCands.insert(currentCands.end(),
-                      associatedCands_.begin(), associatedCands_.end());
-  currentCands.insert(currentCands.end(),
-                      unassignedCands_.begin(), unassignedCands_.end());
+  modelCards_.clear();
 
-  const auto session = BridgeSessionBuilder::build(
-      worldName_.toStdString(),
-      currentKey(),
-      currentCands,
-      store_,
-      heuristic_,
-      discoveredTopics_,
-      discoveredModels_,
-      includeAllModels_);
-
-  bridgeCommand_        = QString::fromStdString(session.command);
-  bridgeCommandDisplay_ = QString::fromStdString(session.commandWrapped);
-  currentChecked_       = session.currentModelChecked;
-  totalChecked_         = session.currentModelChecked + session.otherModelsChecked;
-
-  if (includeAllModels_ && session.otherModelsChecked > 0)
+  for (const auto &modelName : discoveredModels_)
   {
-    selectionSummary_ = QString("%1 from current  +  %2 from other models")
-                          .arg(session.currentModelChecked)
-                          .arg(session.otherModelsChecked);
-  }
-  else
-  {
-    selectionSummary_ = QString("%1 topic%2 selected")
-                          .arg(session.currentModelChecked)
-                          .arg(session.currentModelChecked == 1 ? "" : "s");
+    static const ModelSensorTree emptyTree;
+    static const std::vector<BridgeTopicCandidate> emptyCands;
+
+    const auto treeIt = perModelTrees_.find(modelName);
+    const auto candIt = perModelCands_.find(modelName);
+
+    const ModelSensorTree &tree =
+        (treeIt != perModelTrees_.end()) ? treeIt->second : emptyTree;
+    const std::vector<BridgeTopicCandidate> &cands =
+        (candIt != perModelCands_.end()) ? candIt->second : emptyCands;
+
+    modelCards_.append(buildModelCard(modelName, tree, cands));
   }
 
-  if (session.missingTopics.empty())
+  additionalView_ = QVariantList{};
+  for (const auto &c : additionalCands_)
+    additionalView_.append(toVariantMap(c));
+
+  unsupportedView_ = QVariantList{};
+  for (const auto &c : unsupportedCands_)
+    unsupportedView_.append(toVariantMap(c));
+
+  emit modelsChanged();
+}
+
+void Ros2BridgeManagerGui::rebuildBridgeCommand()
+{
+  // All candidates in discovery order: per-model then additional.
+  std::vector<BridgeTopicCandidate> allCands;
+  for (const auto &modelName : discoveredModels_)
   {
-    missingTopicsWarning_.clear();
+    auto it = perModelCands_.find(modelName);
+    if (it != perModelCands_.end())
+      for (const auto &c : it->second)
+        allCands.push_back(c);
   }
-  else
-  {
-    QStringList list;
-    for (const auto &t : session.missingTopics)
-      list << QString::fromStdString(t);
-    missingTopicsWarning_ =
-      QString("%1 previously selected topic%2 not currently advertised: %3")
-        .arg(list.size())
-        .arg(list.size() == 1 ? "" : "s")
-        .arg(list.join(", "));
-  }
+  for (const auto &c : additionalCands_)
+    allCands.push_back(c);
+
+  bridgeCommand_        = QString::fromStdString(BridgeCommandBuilder::buildCommand(allCands));
+  bridgeCommandDisplay_ = QString::fromStdString(BridgeCommandBuilder::buildCommandWrapped(allCands));
+
+  int count = 0;
+  for (const auto &c : allCands)
+    if (c.checked && c.bridgeable) ++count;
+  selectedBridgeTopicCount_ = count;
 
   emit bridgeCommandChanged();
 }
 
 // ============================================================================
-// Refresh — discover everything, then recompute + publish
+// Refresh — discover world + topics, then recompute
 // ============================================================================
 
 void Ros2BridgeManagerGui::refresh()
@@ -489,35 +482,7 @@ void Ros2BridgeManagerGui::refresh()
           emit self->worldNameChanged();
         }
 
-        QStringList modelNames;
-        for (const auto &m : worldInfo.modelNames)
-          modelNames << QString::fromStdString(m);
-
-        if (modelNames != self->modelNames_)
-        {
-          self->modelNames_ = modelNames;
-          emit self->modelNamesChanged();
-        }
         self->discoveredModels_ = worldInfo.modelNames;
-
-        if (!self->selectedModel_.isEmpty() &&
-            !modelNames.contains(self->selectedModel_))
-        {
-          self->modelGoneWarning_ = QString(
-              "Selected model '%1' is no longer present in the world. "
-              "Switched to manual mode; selection state preserved.")
-                .arg(self->selectedModel_);
-          self->selectedModel_.clear();
-          emit self->selectedModelChanged();
-          emit self->modelGoneWarningChanged();
-        }
-        else if (!self->modelGoneWarning_.isEmpty() &&
-                 !self->selectedModel_.isEmpty())
-        {
-          self->modelGoneWarning_.clear();
-          emit self->modelGoneWarningChanged();
-        }
-
         self->discoveredTopics_ = topics;
 
         if (!worldInfo.errorMessage.empty())
@@ -529,7 +494,7 @@ void Ros2BridgeManagerGui::refresh()
           self->setStatus(
               QString("World: %1  •  Models: %2  •  Topics: %3")
                   .arg(self->worldName_)
-                  .arg(modelNames.size())
+                  .arg(static_cast<int>(worldInfo.modelNames.size()))
                   .arg(static_cast<int>(topics.size())));
         }
 
@@ -546,104 +511,71 @@ void Ros2BridgeManagerGui::refresh()
 }
 
 // ============================================================================
-// Selection / per-topic toggles
+// Per-topic toggles
 // ============================================================================
 
-void Ros2BridgeManagerGui::selectModel(const QString &modelName)
+void Ros2BridgeManagerGui::setTopicChecked(const QString &modelName,
+                                            const QString &topic,
+                                            bool checked)
 {
-  if (selectedModel_ == modelName)
-    return;
-  selectedModel_ = modelName;
-  if (!selectedModel_.isEmpty() && !modelGoneWarning_.isEmpty())
-  {
-    modelGoneWarning_.clear();
-    emit modelGoneWarningChanged();
-  }
-  emit selectedModelChanged();
-  recomputeAndPublish();
-}
-
-void Ros2BridgeManagerGui::setTopicChecked(const QString &topic, bool checked)
-{
-  const std::string key    = currentKey();
+  const std::string model  = modelName.toStdString();
   const std::string sTopic = topic.toStdString();
+  const std::string world  = worldName_.toStdString();
+  const std::string key    = ModelTopicSelectionStore::keyForModel(world, model);
 
-  bool bridgeable = false;
-  auto applyTo = [&](std::vector<BridgeTopicCandidate> &cs)
+  auto it = perModelCands_.find(model);
+  if (it == perModelCands_.end()) return;
+
+  bool found = false;
+  for (auto &c : it->second)
   {
-    for (auto &c : cs)
+    if (c.gzTopic == sTopic && c.bridgeable)
     {
-      if (c.gzTopic == sTopic)
-      {
-        if (!c.bridgeable) return false;
-        c.checked = checked;
-        bridgeable = true;
-        return true;
-      }
-    }
-    return false;
-  };
-  if (!applyTo(associatedCands_)) applyTo(unassignedCands_);
-  if (!bridgeable) return;
-
-  store_.setOverride(key, sTopic, checked);
-
-  associatedView_ = toVariantList(associatedCands_);
-  unassignedView_ = toVariantList(unassignedCands_);
-  emit topicsChanged();
-
-  rebuildSession();
-}
-
-void Ros2BridgeManagerGui::checkAllAssociated()
-{
-  const std::string key = currentKey();
-  for (auto &c : associatedCands_)
-  {
-    if (c.bridgeable)
-    {
-      c.checked = true;
-      store_.setOverride(key, c.gzTopic, true);
+      c.checked = checked;
+      store_.setOverride(key, sTopic, checked);
+      found = true;
+      break;
     }
   }
-  associatedView_ = toVariantList(associatedCands_);
-  emit topicsChanged();
-  rebuildSession();
+  if (!found) return;
+
+  rebuildModelCards();
+  rebuildBridgeCommand();
 }
 
-void Ros2BridgeManagerGui::uncheckAllCurrentModel()
+void Ros2BridgeManagerGui::setAdditionalTopicChecked(const QString &topic, bool checked)
 {
-  const std::string key = currentKey();
-  auto unset = [&](std::vector<BridgeTopicCandidate> &cs)
+  const std::string sTopic = topic.toStdString();
+  const std::string world  = worldName_.toStdString();
+  const std::string addKey = world + "::" + kAdditionalMarker;
+
+  bool found = false;
+  for (auto &c : additionalCands_)
   {
-    for (auto &c : cs)
+    if (c.gzTopic == sTopic && c.bridgeable)
     {
-      if (!c.bridgeable) continue;
-      c.checked = false;
-      store_.setOverride(key, c.gzTopic, false);
+      c.checked = checked;
+      store_.setOverride(addKey, sTopic, checked);
+      found = true;
+      break;
     }
-  };
-  unset(associatedCands_);
-  unset(unassignedCands_);
+  }
+  if (!found) return;
 
-  associatedView_ = toVariantList(associatedCands_);
-  unassignedView_ = toVariantList(unassignedCands_);
-  emit topicsChanged();
-  rebuildSession();
+  additionalView_ = QVariantList{};
+  for (const auto &c : additionalCands_)
+    additionalView_.append(toVariantMap(c));
+  emit modelsChanged();
+
+  rebuildBridgeCommand();
 }
 
-void Ros2BridgeManagerGui::resetCurrentModelSelection()
+void Ros2BridgeManagerGui::resetModelSelection(const QString &modelName)
 {
-  store_.resetKey(currentKey());
+  const std::string model = modelName.toStdString();
+  const std::string world = worldName_.toStdString();
+  store_.resetKey(ModelTopicSelectionStore::keyForModel(world, model));
   recomputeAndPublish();
-}
-
-void Ros2BridgeManagerGui::setIncludeAllModels(bool enabled)
-{
-  if (includeAllModels_ == enabled) return;
-  includeAllModels_ = enabled;
-  emit includeAllModelsChanged();
-  rebuildSession();
 }
 
 void Ros2BridgeManagerGui::setAutoRefresh(bool enabled)

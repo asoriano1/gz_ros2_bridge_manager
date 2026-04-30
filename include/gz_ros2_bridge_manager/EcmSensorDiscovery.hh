@@ -12,13 +12,14 @@ namespace gz_ros2_bridge_manager
 using EntityId = uint64_t;
 
 /// How a sensor's topic was matched against the advertised gz-transport list.
-/// Higher is more authoritative.
 enum class MatchSource
 {
-  Unresolved = 0,            // sensor found in ECM but no topic advertised
-  EcmStandardPrefix = 1,     // no SensorTopic; matched via Gazebo default path
-  EcmSensorTopicPrefix = 2,  // SensorTopic present; topic starts with it (suffix match)
-  EcmSensorTopicExact = 3,   // SensorTopic present; exact topic match
+  Unresolved = 0,              // no matching topic found; unresolvable
+  EcmStandardPrefix = 1,       // no SensorTopic; matched via Gazebo default path
+  EcmSensorTopicPrefix = 2,    // SensorTopic present; topic starts with it (suffix match)
+  EcmSensorTopicExact = 3,     // SensorTopic present; exact topic match
+  NameMatch = 4,               // sensor/link name appears in topic path (weak, unchecked)
+  TypeCompatibleFallback = 5,  // topic type compatible with sensor (weakest, unchecked)
 };
 
 const char *matchSourceName(MatchSource s);

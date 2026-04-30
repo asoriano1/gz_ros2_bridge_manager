@@ -390,14 +390,16 @@ TEST(EcmTopicMatcher, NestedModelFlagDoesNotBreakMatching)
 }
 
 // ============================================================================
-// Test 17 — matchSourceName returns correct strings
+// Test 17 — matchSourceName returns user-friendly strings
 // ============================================================================
 TEST(EcmTopicMatcher, MatchSourceNameStrings)
 {
-  EXPECT_STREQ(matchSourceName(MatchSource::Unresolved),           "Unresolved");
-  EXPECT_STREQ(matchSourceName(MatchSource::EcmStandardPrefix),    "EcmStandardPrefix");
-  EXPECT_STREQ(matchSourceName(MatchSource::EcmSensorTopicPrefix), "EcmSensorTopicPrefix");
-  EXPECT_STREQ(matchSourceName(MatchSource::EcmSensorTopicExact),  "EcmSensorTopicExact");
+  EXPECT_STREQ(matchSourceName(MatchSource::Unresolved),              "Unresolved");
+  EXPECT_STREQ(matchSourceName(MatchSource::EcmStandardPrefix),       "ECM path");
+  EXPECT_STREQ(matchSourceName(MatchSource::EcmSensorTopicPrefix),    "ECM prefix");
+  EXPECT_STREQ(matchSourceName(MatchSource::EcmSensorTopicExact),     "ECM exact");
+  EXPECT_STREQ(matchSourceName(MatchSource::NameMatch),               "Name match");
+  EXPECT_STREQ(matchSourceName(MatchSource::TypeCompatibleFallback),  "Type fallback");
 }
 
 // ============================================================================
@@ -425,9 +427,13 @@ TEST(EcmTopicMatcher, MatchAllEmptyFilterReturnsAll)
 }
 
 // ============================================================================
-// Test 19 — Fallback prefix with empty model/link/sensor names yields no match
+// Test 19 — No declaredTopic/fallback, and sensor type incompatible with topic → Unresolved
+//
+// "lidar" appears in the topic path (name token match) but the sensor type is
+// "navsat" which expects NavSatFix, not LaserScan.  Both NameMatch and
+// TypeCompatibleFallback fail on the type check → truly Unresolved.
 // ============================================================================
-TEST(EcmTopicMatcher, EmptyFallbackPrefixAndNoDeclaredTopicIsUnresolved)
+TEST(EcmTopicMatcher, IncompatibleTypeWithNameInPathIsUnresolved)
 {
   BridgeTypeMapper mapper;
   const std::string topic = "/world/w/model/robot/link/base/sensor/lidar/scan";
@@ -436,10 +442,10 @@ TEST(EcmTopicMatcher, EmptyFallbackPrefixAndNoDeclaredTopicIsUnresolved)
     makeEntry(topic, "gz.msgs.LaserScan", mapper),
   };
 
-  // Sensor with neither declaredTopic nor fallback set.
+  // Sensor type "navsat" expects NavSatFix — does not match LaserScan.
   EcmSensorEntry s;
   s.sensorName = "lidar";
-  s.sensorType = "gpu_lidar";
+  s.sensorType = "navsat";
 
   auto ds = EcmTopicMatcher::matchSensor(s, adv);
   EXPECT_FALSE(ds.resolved);
@@ -469,6 +475,61 @@ TEST(EcmTopicMatcher, CameraSubPathCollectsAllSuffixes)
   // All five topics must be collected (no duplicates).
   EXPECT_EQ(ds.matchedTopicNames.size(), 5u);
   EXPECT_EQ(ds.matchedBridgeSpecs.size(), 5u);
+}
+
+// ============================================================================
+// Test 21 — NameMatch: sensor name appears as path token AND type compatible
+// ============================================================================
+TEST(EcmTopicMatcher, NameMatchWhenSensorNameInTopicPath)
+{
+  BridgeTypeMapper mapper;
+  // "front_laser" is an exact path segment in this topic.
+  const std::string topic = "/robot_ns/front_laser/scan";
+  GzTopicEntry adv = makeEntry(topic, "gz.msgs.LaserScan", mapper);
+
+  // No declaredTopic and no fallback prefix.
+  EcmSensorEntry s;
+  s.modelEntity  = 100;
+  s.modelName    = "robot_ns";
+  s.linkEntity   = 101;
+  s.linkName     = "base_link";
+  s.sensorEntity = 102;
+  s.sensorName   = "front_laser";
+  s.sensorType   = "gpu_lidar";  // expects LaserScan → type matches
+
+  auto ds = EcmTopicMatcher::matchSensor(s, {adv});
+  EXPECT_TRUE(ds.resolved);
+  EXPECT_EQ(ds.matchSource, MatchSource::NameMatch);
+  ASSERT_EQ(ds.matchedTopicNames.size(), 1u);
+  EXPECT_EQ(ds.matchedTopicNames[0], topic);
+  EXPECT_FALSE(ds.warning.empty());
+}
+
+// ============================================================================
+// Test 22 — TypeCompatibleFallback: name not in path but type matches
+// ============================================================================
+TEST(EcmTopicMatcher, TypeCompatibleFallbackWhenNameNotInPath)
+{
+  BridgeTypeMapper mapper;
+  // "xyz_sensor" does NOT appear as a segment in /some/unrelated/scan.
+  const std::string topic = "/some/unrelated/scan";
+  GzTopicEntry adv = makeEntry(topic, "gz.msgs.LaserScan", mapper);
+
+  EcmSensorEntry s;
+  s.modelEntity  = 200;
+  s.modelName    = "robot";
+  s.linkEntity   = 201;
+  s.linkName     = "base_link";
+  s.sensorEntity = 202;
+  s.sensorName   = "xyz_sensor";  // not in topic path → NameMatch fails
+  s.sensorType   = "gpu_lidar";   // expects LaserScan → TypeCompatibleFallback succeeds
+
+  auto ds = EcmTopicMatcher::matchSensor(s, {adv});
+  EXPECT_TRUE(ds.resolved);
+  EXPECT_EQ(ds.matchSource, MatchSource::TypeCompatibleFallback);
+  ASSERT_EQ(ds.matchedTopicNames.size(), 1u);
+  EXPECT_EQ(ds.matchedTopicNames[0], topic);
+  EXPECT_FALSE(ds.warning.empty());
 }
 
 int main(int argc, char **argv)

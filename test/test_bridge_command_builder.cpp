@@ -98,6 +98,89 @@ TEST(BridgeCommandBuilder, SkipsCheckedButUnsupported)
   EXPECT_NE(cmd.find("/scan"),  std::string::npos);
 }
 
+// ---- Multi-model tests ---------------------------------------------------
+// In the accordion workflow the GUI concatenates candidates from all models
+// (in discovery order) and calls BridgeCommandBuilder directly.
+
+TEST(BridgeCommandBuilder, MultiModelCommandBuildsFromAllModels)
+{
+  // Simulate two models' candidates concatenated before command generation.
+  std::vector<BridgeTopicCandidate> model_a{
+    make("/model/robot_a/scan", true, true,
+         "/model/robot_a/scan@sensor_msgs/msg/LaserScan@gz.msgs.LaserScan"),
+    make("/model/robot_a/imu",  true, true,
+         "/model/robot_a/imu@sensor_msgs/msg/Imu@gz.msgs.IMU"),
+  };
+  std::vector<BridgeTopicCandidate> model_b{
+    make("/model/robot_b/scan", true, true,
+         "/model/robot_b/scan@sensor_msgs/msg/LaserScan@gz.msgs.LaserScan"),
+  };
+
+  std::vector<BridgeTopicCandidate> all;
+  all.insert(all.end(), model_a.begin(), model_a.end());
+  all.insert(all.end(), model_b.begin(), model_b.end());
+
+  const auto specs = BridgeCommandBuilder::selectedSpecs(all);
+  ASSERT_EQ(specs.size(), 3u);
+
+  const std::string cmd = BridgeCommandBuilder::buildCommand(all);
+  EXPECT_NE(cmd.find("/model/robot_a/scan"), std::string::npos);
+  EXPECT_NE(cmd.find("/model/robot_a/imu"),  std::string::npos);
+  EXPECT_NE(cmd.find("/model/robot_b/scan"), std::string::npos);
+}
+
+TEST(BridgeCommandBuilder, MultiModelCommandDeduplicatesAcrossModels)
+{
+  // Both models check the same global /clock topic — it must appear only once.
+  const std::string clockSpec = "/clock@rosgraph_msgs/msg/Clock@gz.msgs.Clock";
+
+  std::vector<BridgeTopicCandidate> model_a{
+    make("/clock", true, true, clockSpec),
+    make("/model/robot_a/scan", true, true,
+         "/model/robot_a/scan@sensor_msgs/msg/LaserScan@gz.msgs.LaserScan"),
+  };
+  std::vector<BridgeTopicCandidate> model_b{
+    make("/clock", true, true, clockSpec),  // same spec — duplicate
+    make("/model/robot_b/scan", true, true,
+         "/model/robot_b/scan@sensor_msgs/msg/LaserScan@gz.msgs.LaserScan"),
+  };
+
+  std::vector<BridgeTopicCandidate> all;
+  all.insert(all.end(), model_a.begin(), model_a.end());
+  all.insert(all.end(), model_b.begin(), model_b.end());
+
+  const auto specs = BridgeCommandBuilder::selectedSpecs(all);
+  // /clock once, robot_a/scan, robot_b/scan = 3 unique specs.
+  ASSERT_EQ(specs.size(), 3u);
+
+  // Verify /clock appears exactly once in the command.
+  const std::string cmd = BridgeCommandBuilder::buildCommand(all);
+  const auto first  = cmd.find(clockSpec);
+  ASSERT_NE(first, std::string::npos);
+  EXPECT_EQ(cmd.find(clockSpec, first + 1), std::string::npos);
+}
+
+TEST(BridgeCommandBuilder, AdditionalTopicAppearsInCommand)
+{
+  // Additional bridgeable topics (not linked to any model) are appended last.
+  std::vector<BridgeTopicCandidate> modelCands{
+    make("/model/robot_a/scan", true, true,
+         "/model/robot_a/scan@sensor_msgs/msg/LaserScan@gz.msgs.LaserScan"),
+  };
+  std::vector<BridgeTopicCandidate> additionalCands{
+    make("/clock", true, true, "/clock@rosgraph_msgs/msg/Clock@gz.msgs.Clock"),
+  };
+
+  std::vector<BridgeTopicCandidate> all;
+  all.insert(all.end(), modelCands.begin(), modelCands.end());
+  all.insert(all.end(), additionalCands.begin(), additionalCands.end());
+
+  const auto specs = BridgeCommandBuilder::selectedSpecs(all);
+  ASSERT_EQ(specs.size(), 2u);
+  EXPECT_EQ(specs[0], "/model/robot_a/scan@sensor_msgs/msg/LaserScan@gz.msgs.LaserScan");
+  EXPECT_EQ(specs[1], "/clock@rosgraph_msgs/msg/Clock@gz.msgs.Clock");
+}
+
 int main(int argc, char **argv)
 {
   ::testing::InitGoogleTest(&argc, argv);
