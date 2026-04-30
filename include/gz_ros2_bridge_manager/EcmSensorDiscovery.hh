@@ -82,12 +82,15 @@ public:
   ///   1. declaredTopic exact match         → EcmSensorTopicExact
   ///   2. declaredTopic + suffix/prefix     → EcmSensorTopicPrefix
   ///   3. fallbackGazeboTopicPrefix matches → EcmStandardPrefix
-  ///   4. nothing                           → Unresolved
+  ///   4. constrained weak fallback         → NameMatch / TypeCompatibleFallback
+  ///   5. nothing                           → Unresolved
   static DiscoveredSensor matchSensor(
       const EcmSensorEntry &sensor,
       const std::vector<GzTopicEntry> &advertisedTopics);
 
-  /// Match all sensors, optionally filtering to a single model name.
+  /// Match all sensors with global topic claiming, then optionally filter
+  /// the returned tree to a single model name. A topic already claimed by
+  /// one sensor/model will not be attached to another.
   static ModelSensorTree matchAll(
       const std::string &worldName,
       const std::vector<EcmSensorEntry> &sensors,

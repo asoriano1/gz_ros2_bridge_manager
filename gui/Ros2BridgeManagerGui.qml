@@ -108,7 +108,7 @@ Rectangle {
       Label {
         text: entry.topic
         font.pixelSize: 10; font.family: "monospace"
-        elide: Text.ElideLeft; Layout.fillWidth: true
+        elide: Text.ElideMiddle; Layout.fillWidth: true
         ToolTip.visible: th.containsMouse; ToolTip.text: entry.topic; ToolTip.delay: 400
         MouseArea { id: th; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
       }
@@ -236,6 +236,43 @@ Rectangle {
       }
 
       // ── 4. Model accordion cards ──────────────────────────────────
+      Label {
+        Layout.leftMargin: 10
+        Layout.rightMargin: 10
+        Layout.fillWidth: true
+        text: "Models:"
+        font.pixelSize: 10
+        font.bold: true
+        color: "#616161"
+      }
+
+      Rectangle {
+        Layout.leftMargin: 10; Layout.rightMargin: 10
+        Layout.fillWidth: true
+        implicitHeight: emptyModelsLabel.implicitHeight + 18
+        color: "#f5f5f5"
+        radius: 4
+        visible: !bridgeManager.busy &&
+                 bridgeManager.worldName.length > 0 &&
+                 root.visibleCards.length === 0
+
+        Label {
+          id: emptyModelsLabel
+          anchors {
+            left: parent.left
+            right: parent.right
+            verticalCenter: parent.verticalCenter
+            leftMargin: 10
+            rightMargin: 10
+          }
+          text: "No models with sensors detected. Try Refresh or enable All models."
+          font.pixelSize: 11
+          color: "#757575"
+          wrapMode: Text.Wrap
+          horizontalAlignment: Text.AlignHCenter
+        }
+      }
+
       Repeater {
         model: root.visibleCards
 
@@ -332,7 +369,7 @@ Rectangle {
                     Label {
                       text: modelData.topic
                       font.pixelSize: 9; font.family: "monospace"; color: "#33691e"
-                      Layout.fillWidth: true; elide: Text.ElideLeft
+                      Layout.fillWidth: true; elide: Text.ElideMiddle
                       ToolTip.visible: tpHov.containsMouse; ToolTip.text: modelData.topic; ToolTip.delay: 300
                       MouseArea { id: tpHov; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
                     }

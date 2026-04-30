@@ -532,6 +532,112 @@ TEST(EcmTopicMatcher, TypeCompatibleFallbackWhenNameNotInPath)
   EXPECT_FALSE(ds.warning.empty());
 }
 
+// ============================================================================
+// Test 23 — Strong match claimed by model A must not leak into model B
+// ============================================================================
+TEST(EcmTopicMatcher, StrongClaimedTopicDoesNotAppearUnderOtherModel)
+{
+  BridgeTypeMapper mapper;
+  const std::string topicA =
+      "/world/default/model/A/link/la/sensor/laser_a/scan";
+
+  std::vector<GzTopicEntry> adv{
+    makeEntry(topicA, "gz.msgs.LaserScan", mapper),
+  };
+
+  std::vector<EcmSensorEntry> sensors{
+    makeSensor("A", "la", "laser_a", "gpu_lidar",
+               "/world/default/model/A/link/la/sensor/laser_a"),
+    makeSensor("B", "lb", "laser_b", "gpu_lidar"),
+  };
+
+  auto tree = EcmTopicMatcher::matchAll("default", sensors, "", adv);
+  ASSERT_EQ(tree.sensors.size(), 2u);
+
+  EXPECT_EQ(tree.sensors[0].sensor.modelName, "A");
+  EXPECT_TRUE(tree.sensors[0].resolved);
+  ASSERT_EQ(tree.sensors[0].matchedTopicNames.size(), 1u);
+  EXPECT_EQ(tree.sensors[0].matchedTopicNames[0], topicA);
+
+  EXPECT_EQ(tree.sensors[1].sensor.modelName, "B");
+  EXPECT_FALSE(tree.sensors[1].resolved);
+  EXPECT_TRUE(tree.sensors[1].matchedTopicNames.empty());
+}
+
+// ============================================================================
+// Test 24 — Ambiguous compatible generic topic stays unassigned
+// ============================================================================
+TEST(EcmTopicMatcher, AmbiguousCompatibleTopicDoesNotAttachToAnyModel)
+{
+  BridgeTypeMapper mapper;
+  const std::string topic = "/some/unrelated/scan";
+
+  std::vector<GzTopicEntry> adv{
+    makeEntry(topic, "gz.msgs.LaserScan", mapper),
+  };
+
+  std::vector<EcmSensorEntry> sensors{
+    makeSensor("A", "la", "sensor_a", "gpu_lidar"),
+    makeSensor("B", "lb", "sensor_b", "gpu_lidar"),
+  };
+
+  auto tree = EcmTopicMatcher::matchAll("default", sensors, "", adv);
+  ASSERT_EQ(tree.sensors.size(), 2u);
+  EXPECT_FALSE(tree.sensors[0].resolved);
+  EXPECT_FALSE(tree.sensors[1].resolved);
+  EXPECT_TRUE(tree.sensors[0].matchedTopicNames.empty());
+  EXPECT_TRUE(tree.sensors[1].matchedTopicNames.empty());
+}
+
+// ============================================================================
+// Test 25 — Model-scoped type fallback assigns only to the owning model
+// ============================================================================
+TEST(EcmTopicMatcher, ModelScopedTypeFallbackStaysWithOwningModel)
+{
+  BridgeTypeMapper mapper;
+  const std::string topicA =
+      "/world/default/model/A/custom/scan";
+
+  std::vector<GzTopicEntry> adv{
+    makeEntry(topicA, "gz.msgs.LaserScan", mapper),
+  };
+
+  std::vector<EcmSensorEntry> sensors{
+    makeSensor("A", "la", "mystery_a", "gpu_lidar"),
+    makeSensor("B", "lb", "mystery_b", "gpu_lidar"),
+  };
+
+  auto tree = EcmTopicMatcher::matchAll("default", sensors, "", adv);
+  ASSERT_EQ(tree.sensors.size(), 2u);
+
+  EXPECT_TRUE(tree.sensors[0].resolved);
+  EXPECT_EQ(tree.sensors[0].matchSource, MatchSource::TypeCompatibleFallback);
+  ASSERT_EQ(tree.sensors[0].matchedTopicNames.size(), 1u);
+  EXPECT_EQ(tree.sensors[0].matchedTopicNames[0], topicA);
+
+  EXPECT_FALSE(tree.sensors[1].resolved);
+  EXPECT_TRUE(tree.sensors[1].matchedTopicNames.empty());
+}
+
+// ============================================================================
+// Test 26 — Multiple unrelated compatible topics are too ambiguous for fallback
+// ============================================================================
+TEST(EcmTopicMatcher, MultipleGenericCompatibleTopicsStayUnresolved)
+{
+  BridgeTypeMapper mapper;
+
+  std::vector<GzTopicEntry> adv{
+    makeEntry("/scan/front", "gz.msgs.LaserScan", mapper),
+    makeEntry("/scan/rear",  "gz.msgs.LaserScan", mapper),
+  };
+
+  EcmSensorEntry s = makeSensor("robot", "base", "mystery_laser", "gpu_lidar");
+
+  auto ds = EcmTopicMatcher::matchSensor(s, adv);
+  EXPECT_FALSE(ds.resolved);
+  EXPECT_TRUE(ds.matchedTopicNames.empty());
+}
+
 int main(int argc, char **argv)
 {
   ::testing::InitGoogleTest(&argc, argv);

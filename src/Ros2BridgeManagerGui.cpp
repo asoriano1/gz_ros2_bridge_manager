@@ -344,12 +344,38 @@ void Ros2BridgeManagerGui::recomputeAndPublish()
   perModelTrees_.clear();
   warnings_.clear();
 
+  const ModelSensorTree allSensorsTree = EcmTopicMatcher::matchAll(
+      world, ecmSensors, "", discoveredTopics_);
+
+  std::unordered_map<std::string, ModelSensorTree> treesByModel;
+  for (const auto &modelName : discoveredModels_)
+  {
+    ModelSensorTree tree;
+    tree.worldName = world;
+    tree.modelName = modelName;
+    tree.ecmConfirmed = true;
+    treesByModel.emplace(modelName, std::move(tree));
+  }
+
+  for (const auto &sensor : allSensorsTree.sensors)
+  {
+    auto &tree = treesByModel[sensor.sensor.modelName];
+    if (tree.worldName.empty())
+      tree.worldName = world;
+    if (tree.modelName.empty())
+      tree.modelName = sensor.sensor.modelName;
+    tree.ecmConfirmed = true;
+    tree.sensors.push_back(sensor);
+  }
+
   std::unordered_set<std::string> globalCovered;
 
   for (const auto &modelName : discoveredModels_)
   {
-    ModelSensorTree tree = EcmTopicMatcher::matchAll(
-        world, ecmSensors, modelName, discoveredTopics_);
+    static const ModelSensorTree emptyTree;
+    const auto treeIt = treesByModel.find(modelName);
+    const ModelSensorTree &tree =
+        (treeIt != treesByModel.end()) ? treeIt->second : emptyTree;
 
     std::unordered_set<std::string> modelCovered;
     std::vector<BridgeTopicCandidate> modelCands =
