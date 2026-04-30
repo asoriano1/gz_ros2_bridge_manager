@@ -1,58 +1,43 @@
 # gz_ros2_bridge_manager
 
-A Gazebo Harmonic GUI plugin that discovers active Gazebo Transport topics and
-helps you build a `ros2 run ros_gz_bridge parameter_bridge` command — without
-reading URDF, SDF, `robot_description`, or any metadata file.
+Gazebo Harmonic GUI plugin for ROS 2 Jazzy that discovers ECM sensor topics,
+maps them to `ros_gz_bridge`, and lets you run the resulting bridge directly
+from the Gazebo UI.
 
----
+It is designed to work as the second step of a lightweight Gazebo/ROS 2
+workflow:
 
-## Capabilities
+1. Import or spawn the robot with
+   [`gz_model_importer_gui`](https://github.com/asoriano1/gz_model_importer_plugin)
+2. Open `gz_ros2_bridge_manager`
+3. Review sensor topics and start the corresponding `ros_gz_bridge`
 
-- **World and model discovery** — detects the active Gazebo world name and the
-  models in it using gz-transport (`/world/<name>/stats` topic + `/world/<name>/scene/info` service).
-- **Topic discovery** — enumerates all gz-transport topics, resolves each
-  publisher's message type, and maps it to the corresponding ROS 2 type.
-- **Heuristic topic association** — classifies topics per model with four
-  confidence levels (exact model path → sanitized name → raw name → unassigned).
-  Generic topics (`/clock`, `/scan`, `/tf`, …) are never auto-associated unless
-  the topic path explicitly references the model.
-- **Per-model selection memory** — manual checkbox overrides persist for the
-  lifetime of the session, per model. Switching models and back restores your
-  choices.
-- **Include-all-models mode** — unions the checked topics from every curated
-  model in the world into a single bridge command, with deduplication.
-- **Missing-topic warning** — topics you explicitly checked in a previous
-  discovery round that are no longer advertised are flagged rather than silently
-  dropped.
-- **Model-gone detection** — if the selected model disappears from the world on
-  refresh, the plugin falls back to manual mode and shows a warning.
-- **Auto-refresh** — optional 2.5 s polling timer; skips a tick if a refresh is
-  already in flight.
-- **Copy to clipboard** — single-click copy of the complete command.
+## Demo
 
----
+![Bridge manager demo](demo1.gif)
 
-## Non-goals and limitations
+## What it does
 
-- **No process management.** The plugin generates the command; you run it in a
-  terminal. QProcess-based launch is a planned future feature.
-- **No session persistence.** Checkbox overrides reset when the plugin is closed.
-  JSON profile save/load is a planned future feature.
-- **No URDF/SDF/xacro parsing.** Discovery is entirely via gz-transport at runtime.
-- **No sensor hierarchy.** The `scene/info` service exposes models and visuals
-  but not the sensor→topic mapping. Heuristic topic matching compensates for
-  this gap.
-- **No namespace/frame-prefix rewriting.** Selecting a model namespace and
-  `--ros-args` remapping is left to the user. The plugin cannot rewrite
-  hardcoded plugin topics inside arbitrary robot descriptions.
-- **No Fuel integration, thumbnails, or drag-and-drop.** This is a bridge
-  command helper, not a robot catalog.
+- Discovers the active Gazebo world and the models currently present in it
+- Reads ECM sensor entities and uses `components::SensorTopic` as the primary
+  source of truth for topic assignment
+- Matches advertised Gazebo topics to each sensor, including `camera_info`
+  siblings when they are actually advertised
+- Infers bridge types for common sensor topics when `TopicInfo` is not ready yet
+  but the ECM sensor type is known
+- Builds a deduplicated `parameter_bridge` command from the checked rows
+- Runs, stops, and restarts the bridge process from the UI
+- Captures bridge output and exposes compact debug details when needed
 
----
+## Scope
 
-## Build
+This plugin intentionally focuses on runtime discovery and bridge orchestration.
+It does not parse URDF, SDF, XACRO, `robot_description`, controller metadata,
+or importer-side configuration files.
 
-Requires ROS 2 Jazzy, Gazebo Harmonic, and a colcon workspace.
+## Quick start
+
+Build and source the package:
 
 ```bash
 cd <workspace_root>
@@ -61,7 +46,89 @@ colcon build --symlink-install --packages-select gz_ros2_bridge_manager
 source install/setup.bash
 ```
 
----
+Start Gazebo with the packaged demo world and the plugin already loaded:
+
+```bash
+gz sim \
+  $(ros2 pkg prefix gz_ros2_bridge_manager)/share/gz_ros2_bridge_manager/worlds/bridge_manager_demo.sdf \
+  --gui-config $(ros2 pkg prefix gz_ros2_bridge_manager)/share/gz_ros2_bridge_manager/config/ros2_bridge_manager.config
+```
+
+Or load the plugin in your own world:
+
+```bash
+gz sim <your_world.sdf> \
+  --gui-config $(ros2 pkg prefix gz_ros2_bridge_manager)/share/gz_ros2_bridge_manager/config/ros2_bridge_manager.config
+```
+
+The packaged config references the plugin as:
+
+```xml
+<plugin filename="Ros2BridgeManagerGui" name="ROS 2 Bridge Manager"/>
+```
+
+## Typical workflow
+
+1. Load a robot into Gazebo, ideally with
+   [`gz_model_importer_gui`](https://github.com/asoriano1/gz_model_importer_plugin)
+2. Click `Refresh` or enable `Auto`
+3. Expand the relevant model card under `Models:`
+4. Review the compact sensor rows:
+   `checkbox | topic | Gazebo → ROS 2 type`
+5. Adjust the selected rows if needed
+6. Use `Run` to start `ros_gz_bridge parameter_bridge`
+7. Open `Bridge output` only when you need logs or diagnostics
+
+## UI summary
+
+- **Models accordion**: one card per Gazebo model
+- **Compact sensor rows**: checked rows represent bridgeable topics already
+  assigned to ECM sensors
+- **Additional bridgeable topics**: only topics not claimed by any model sensor
+- **Debug/details**: shows ECM `SensorTopic`, sensor type, type source,
+  `TopicInfo` status, fallback path, and warnings
+- **Bridge section**: status, `Run`, `Stop`, `Restart`, collapsed command view,
+  and collapsed process output
+
+## Matching strategy
+
+The main model workflow is ECM-first:
+
+- `SensorTopic` from the ECM is the authoritative link between a sensor entity
+  and its Gazebo topic
+- If `TopicInfo` exposes the message type, that advertised type is used
+- If `TopicInfo` is still unavailable, common sensor types are inferred from the
+  ECM sensor component:
+  - `camera` -> `gz.msgs.Image` -> `sensor_msgs/msg/Image`
+  - `imu` -> `gz.msgs.IMU` -> `sensor_msgs/msg/Imu`
+  - `lidar` / `gpu_lidar` / `ray` -> `gz.msgs.LaserScan` -> `sensor_msgs/msg/LaserScan`
+  - `navsat` / `gps` -> `gz.msgs.NavSat` -> `sensor_msgs/msg/NavSatFix`
+- `camera_info` is only attached when it is actually advertised in Gazebo
+- Topics already claimed under a model are excluded from `Additional bridgeable topics`
+
+## Bridge runtime control
+
+The plugin can launch the bridge directly with:
+
+```bash
+ros2 run ros_gz_bridge parameter_bridge <specs...>
+```
+
+Runtime behavior:
+
+- `Run` starts exactly the currently selected bridge specs
+- `Stop` terminates the managed bridge process group
+- `Restart` is enabled when the selection changes while the bridge is running
+- `Bridge output` captures stdout/stderr from the managed bridge process
+
+## Example command
+
+```bash
+ros2 run ros_gz_bridge parameter_bridge \
+  /sensor_test_robot_urdf_1/camera/image_raw@sensor_msgs/msg/Image@gz.msgs.Image \
+  /sensor_test_robot_urdf_1/camera/camera_info@sensor_msgs/msg/CameraInfo@gz.msgs.CameraInfo \
+  /sensor_test_robot_urdf_1/imu/data_raw@sensor_msgs/msg/Imu@gz.msgs.IMU
+```
 
 ## Test
 
@@ -71,115 +138,38 @@ colcon test --packages-select gz_ros2_bridge_manager
 colcon test-result --verbose
 ```
 
-Five test binaries run (~53 tests total, no Gazebo instance required):
+The test suite covers:
 
-| Binary | What it covers |
-|---|---|
-| `test_bridge_type_mapper` | Type mappings and bridge spec format |
-| `test_topic_association_heuristic` | Classification, sanitization, ambiguity |
-| `test_bridge_command_builder` | Command generation and deduplication |
-| `test_model_topic_selection_store` | Override management, key helpers |
-| `test_bridge_session` | Full session build pipeline |
+- Gazebo type to ROS 2 type mappings
+- ECM sensor extraction and `SensorTopic` handling
+- Topic matching and deduplication
+- Bridge command generation
+- Process manager state transitions
+- Per-model selection state
 
----
+## Architecture
 
-## Loading the plugin
-
-After building and sourcing the workspace, the install step registers the plugin
-path via an ament environment hook. Launch Gazebo and open the plugin from the
-Plugins menu:
-
-```bash
-gz sim <your_world.sdf>
-```
-
-For a direct quick start with the plugin already loaded, the package now installs
-both a GUI config and a small demo world with a camera sensor:
-
-```bash
-gz sim \
-  $(ros2 pkg prefix gz_ros2_bridge_manager)/share/gz_ros2_bridge_manager/worlds/bridge_manager_demo.sdf \
-  --gui-config $(ros2 pkg prefix gz_ros2_bridge_manager)/share/gz_ros2_bridge_manager/config/ros2_bridge_manager.config
-```
-
-If you want to use your own world instead, load the plugin via the packaged
-config file:
-
-```bash
-gz sim <your_world.sdf> \
-  --gui-config $(ros2 pkg prefix gz_ros2_bridge_manager)/share/gz_ros2_bridge_manager/config/ros2_bridge_manager.config
-```
-
-The config file references the plugin as:
-
-```xml
-<plugin filename="Ros2BridgeManagerGui" name="ROS 2 Bridge Manager"/>
-```
-
----
-
-## Usage
-
-1. **Quick start** (optional) — launch the packaged `bridge_manager_demo.sdf`
-   world if you want the bridge manager to find a sensor-bearing model
-   immediately after startup.
-2. **Refresh** — click Refresh (or enable Auto) to discover the active Gazebo world,
-   its models, and all advertised topics.
-3. **Select a model** — pick a model from the drop-down. Topics likely associated
-   with that model appear pre-checked in the "Likely associated" list.
-4. **Tune the selection** — check or uncheck individual topics. Use "Check all" or
-   "Uncheck all" as starting points. "Reset" restores heuristic defaults.
-5. **Include all models** (optional) — enable the checkbox to union the checked
-   topics from every model you have curated in the world into one command.
-6. **Copy** — click Copy to copy the command to the clipboard, then paste it into
-   a sourced ROS 2 terminal.
-
----
-
-## Example command output
-
-```
-ros2 run ros_gz_bridge parameter_bridge \
-  /world/default/model/rbvogui_xl/link/laser_front_link/sensor/laser_front/scan@sensor_msgs/msg/LaserScan@gz.msgs.LaserScan \
-  /world/default/model/rbvogui_xl/link/camera_front_link/sensor/camera_front/image@sensor_msgs/msg/Image@gz.msgs.Image \
-  /clock@rosgraph_msgs/msg/Clock@gz.msgs.Clock
-```
-
----
-
-## Architecture summary
-
-```
-Ros2BridgeManagerGui (gz::gui::Plugin)
+```text
+Ros2BridgeManagerGui (gz::sim::GuiSystem)
 │
-├── WorldDiscovery          — world name + model list (gz-transport)
-├── GazeboTopicDiscovery    — topic enumeration + message types
-├── BridgeTypeMapper        — gz type → ROS 2 type mappings
-│
-├── TopicAssociationHeuristic  — classifies topics per model
-├── ModelTopicSelectionStore   — per-model checkbox override state
-│
-├── BridgeSessionBuilder    — cross-model command assembly
-└── BridgeCommandBuilder    — spec list → command string
+├── WorldDiscovery
+├── GazeboTopicDiscovery
+├── EcmSensorExtractor
+├── EcmTopicMatcher
+├── BridgeTypeMapper
+├── ModelTopicSelectionStore
+├── BridgeCommandBuilder
+└── BridgeProcessManager
 ```
 
-The GUI layer (`Ros2BridgeManagerGui` + QML) owns no business logic. Discovery
-runs on a `QtConcurrent` background thread; results are delivered to the main
-thread via `QMetaObject::invokeMethod(Qt::QueuedConnection)`.
+The UI layer stays thin: discovery and matching live in pure or near-pure C++
+helpers, while QML renders the accordion and bridge controls.
 
-See [`docs/architecture.md`](docs/architecture.md) for design rationale.
+See [`docs/architecture.md`](docs/architecture.md) for more detail.
 
----
+## Current limitations
 
-## Roadmap
-
-| Feature | Status |
-|---|---|
-| Topic discovery + heuristic association | Done |
-| Per-model selection memory | Done |
-| Include-all-models mode | Done |
-| Auto-refresh | Done |
-| JSON profile persistence | Planned |
-| Bridge process launch (QProcess) | Planned |
-| `/world/<w>/stats` subscription (event-driven refresh) | Planned |
-| Model/sensor hierarchy from SDF introspection | Planned |
+- Session selections are not persisted across plugin restarts
+- Only common sensor topic types are inferred when `TopicInfo` is missing
+- Non-standard plugin topics still depend on what Gazebo advertises at runtime
+- The plugin manages only the bridge process it starts itself
