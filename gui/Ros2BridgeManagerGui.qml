@@ -441,7 +441,7 @@ Rectangle {
         }  // modelCard Rectangle
       }  // Repeater visibleCards
 
-      // ── 5. Bridge command (collapsible, collapsed by default) ─────
+      // ── 5. Bridge runtime controls + command/output subsections ───
       Rectangle {
         id: cmdCard
         Layout.leftMargin: 10; Layout.rightMargin: 10
@@ -468,136 +468,178 @@ Rectangle {
           anchors { top: parent.top; left: parent.left; right: parent.right; topMargin: 8; leftMargin: 8; rightMargin: 8 }
           spacing: 6
 
-          Item {
-            Layout.fillWidth: true
-            implicitHeight: cmdHeaderRow.implicitHeight
-
-            RowLayout {
-              id: cmdHeaderRow
-              anchors { left: parent.left; right: parent.right }
-              spacing: 6
-
-              Item {
-                Layout.fillWidth: true
-                implicitHeight: cmdTitle.implicitHeight
-
-                Label {
-                  id: cmdTitle
-                  anchors { left: parent.left; right: parent.right }
-                  text: {
-                    var n = bridgeManager.selectedBridgeTopicCount
-                    return (cmdCard.expanded ? "▼" : "▶") + "  Bridge command  •  " +
-                           n + " topic" + (n === 1 ? "" : "s") + " selected"
-                  }
-                  font.bold: true; font.pixelSize: 12
-                  color: bridgeManager.bridgeCommand.length > 0 ? "#1b5e20" : "#757575"
-                  elide: Text.ElideRight
-                }
-
-                MouseArea {
-                  anchors.fill: parent
-                  cursorShape: Qt.PointingHandCursor
-                  onClicked: cmdCard.expanded = !cmdCard.expanded
-                }
-              }
-
-              Button {
-                text: "Copy"; font.pixelSize: 11
-                implicitWidth: 56; implicitHeight: 26
-                enabled: bridgeManager.bridgeCommand.length > 0
-                onClicked: bridgeManager.copyBridgeCommand()
-              }
-            }
-          }
-
           Rectangle {
             Layout.fillWidth: true
-            implicitHeight: bridgeCtrlRow.implicitHeight + 12
+            implicitHeight: bridgeHeaderCol.implicitHeight + 12
             color: "#ffffff"
             radius: 3
             border.color: "#e0e0e0"
             border.width: 1
 
-            RowLayout {
-              id: bridgeCtrlRow
+            ColumnLayout {
+              id: bridgeHeaderCol
               anchors {
+                top: parent.top
                 left: parent.left
                 right: parent.right
-                verticalCenter: parent.verticalCenter
+                topMargin: 6
                 leftMargin: 8
                 rightMargin: 8
               }
-              spacing: 6
+              spacing: 4
 
-              Label {
-                text: "Status: " + bridgeManager.bridgeStatusText
-                font.pixelSize: 10
-                font.bold: true
-                color: root.bridgeStatusColor(bridgeManager.bridgeStatusText)
+              RowLayout {
                 Layout.fillWidth: true
-                wrapMode: Text.Wrap
+                spacing: 8
+
+                Label {
+                  text: "Bridge runtime"
+                  font.pixelSize: 12
+                  font.bold: true
+                  color: "#263238"
+                }
+
+                Label {
+                  text: "Status: " + bridgeManager.bridgeStatusText
+                  font.pixelSize: 10
+                  font.bold: true
+                  color: root.bridgeStatusColor(bridgeManager.bridgeStatusText)
+                  Layout.fillWidth: true
+                  wrapMode: Text.Wrap
+                }
               }
 
-              Button {
-                text: "Run"
-                font.pixelSize: 10
-                implicitHeight: 24
-                enabled: bridgeManager.selectedBridgeTopicCount > 0 &&
-                         !bridgeManager.bridgeRunning &&
-                         !bridgeManager.bridgeBusy
-                onClicked: bridgeManager.runBridge()
-              }
+              RowLayout {
+                Layout.fillWidth: true
+                spacing: 6
 
-              Button {
-                text: "Stop"
-                font.pixelSize: 10
-                implicitHeight: 24
-                enabled: bridgeManager.bridgeRunning || bridgeManager.bridgeBusy
-                onClicked: bridgeManager.stopBridge()
-              }
+                Item { Layout.fillWidth: true }
 
-              Button {
-                text: "Restart"
-                font.pixelSize: 10
-                implicitHeight: 24
-                visible: bridgeManager.bridgeRunning &&
-                         bridgeManager.bridgeRestartRequired
-                enabled: visible && !bridgeManager.bridgeBusy
-                onClicked: bridgeManager.restartBridge()
+                Button {
+                  text: "Run"
+                  font.pixelSize: 10
+                  implicitHeight: 24
+                  enabled: bridgeManager.selectedBridgeTopicCount > 0 &&
+                           !bridgeManager.bridgeRunning &&
+                           !bridgeManager.bridgeBusy
+                  onClicked: bridgeManager.runBridge()
+                }
+
+                Button {
+                  text: "Stop"
+                  font.pixelSize: 10
+                  implicitHeight: 24
+                  enabled: bridgeManager.bridgeRunning || bridgeManager.bridgeBusy
+                  onClicked: bridgeManager.stopBridge()
+                }
+
+                Button {
+                  text: "Restart"
+                  font.pixelSize: 10
+                  implicitHeight: 24
+                  visible: bridgeManager.bridgeRunning &&
+                           bridgeManager.bridgeRestartRequired
+                  enabled: visible && !bridgeManager.bridgeBusy
+                  onClicked: bridgeManager.restartBridge()
+                }
               }
             }
           }
 
           Rectangle {
-            visible: cmdCard.expanded
             Layout.fillWidth: true
-            implicitHeight: bridgeManager.bridgeCommand.length > 0
-                              ? Math.min(cmdLabel.implicitHeight + 10, 140) : 36
-            color: bridgeManager.bridgeCommand.length > 0 ? "#f1f8e9" : "#fafafa"
+            implicitHeight: cmdSectionCol.implicitHeight + 10
+            color: bridgeManager.bridgeCommand.length > 0 ? "#f8fbf7" : "#fafafa"
             radius: 3
-            border.color: bridgeManager.bridgeCommand.length > 0 ? "#a5d6a7" : "#e0e0e0"
-            border.width: 1; clip: true
+            border.color: bridgeManager.bridgeCommand.length > 0 ? "#c5e1c5" : "#e0e0e0"
+            border.width: 1
 
-            Flickable {
-              anchors { fill: parent; margins: 5 }
-              contentHeight: cmdLabel.implicitHeight; clip: true
-              visible: bridgeManager.bridgeCommand.length > 0
-
-              Label {
-                id: cmdLabel
-                width: parent.width
-                text: bridgeManager.bridgeCommandDisplay
-                font.pixelSize: 10; font.family: "monospace"
-                color: "#1b5e20"; wrapMode: Text.Wrap
+            ColumnLayout {
+              id: cmdSectionCol
+              anchors {
+                top: parent.top
+                left: parent.left
+                right: parent.right
+                topMargin: 5
+                leftMargin: 6
+                rightMargin: 6
               }
-            }
+              spacing: 4
 
-            Label {
-              anchors.centerIn: parent
-              visible: bridgeManager.bridgeCommand.length === 0
-              text: "No topics checked. Expand a model card above and check topics."
-              font.pixelSize: 10; font.italic: true; color: "#9e9e9e"
-              wrapMode: Text.Wrap; horizontalAlignment: Text.AlignHCenter
+              Item {
+                Layout.fillWidth: true
+                implicitHeight: cmdHeaderRow.implicitHeight
+
+                RowLayout {
+                  id: cmdHeaderRow
+                  anchors { left: parent.left; right: parent.right }
+                  spacing: 6
+
+                  Item {
+                    Layout.fillWidth: true
+                    implicitHeight: cmdTitle.implicitHeight
+
+                    Label {
+                      id: cmdTitle
+                      anchors { left: parent.left; right: parent.right }
+                      text: {
+                        var n = bridgeManager.selectedBridgeTopicCount
+                        return (cmdCard.expanded ? "▼" : "▶") + "  Bridge command  •  " +
+                               n + " topic" + (n === 1 ? "" : "s") + " selected"
+                      }
+                      font.bold: true; font.pixelSize: 11
+                      color: bridgeManager.bridgeCommand.length > 0 ? "#1b5e20" : "#757575"
+                      elide: Text.ElideRight
+                    }
+
+                    MouseArea {
+                      anchors.fill: parent
+                      cursorShape: Qt.PointingHandCursor
+                      onClicked: cmdCard.expanded = !cmdCard.expanded
+                    }
+                  }
+
+                  Button {
+                    text: "Copy"; font.pixelSize: 10
+                    implicitWidth: 56; implicitHeight: 24
+                    enabled: bridgeManager.bridgeCommand.length > 0
+                    onClicked: bridgeManager.copyBridgeCommand()
+                  }
+                }
+              }
+
+              Rectangle {
+                visible: cmdCard.expanded
+                Layout.fillWidth: true
+                implicitHeight: bridgeManager.bridgeCommand.length > 0
+                                  ? Math.min(cmdLabel.implicitHeight + 10, 140) : 36
+                color: bridgeManager.bridgeCommand.length > 0 ? "#f1f8e9" : "#fafafa"
+                radius: 3
+                border.color: bridgeManager.bridgeCommand.length > 0 ? "#a5d6a7" : "#e0e0e0"
+                border.width: 1; clip: true
+
+                Flickable {
+                  anchors { fill: parent; margins: 5 }
+                  contentHeight: cmdLabel.implicitHeight; clip: true
+                  visible: bridgeManager.bridgeCommand.length > 0
+
+                  Label {
+                    id: cmdLabel
+                    width: parent.width
+                    text: bridgeManager.bridgeCommandDisplay
+                    font.pixelSize: 10; font.family: "monospace"
+                    color: "#1b5e20"; wrapMode: Text.Wrap
+                  }
+                }
+
+                Label {
+                  anchors.centerIn: parent
+                  visible: bridgeManager.bridgeCommand.length === 0
+                  text: "No topics checked. Expand a model card above and check topics."
+                  font.pixelSize: 10; font.italic: true; color: "#9e9e9e"
+                  wrapMode: Text.Wrap; horizontalAlignment: Text.AlignHCenter
+                }
+              }
             }
           }
 
