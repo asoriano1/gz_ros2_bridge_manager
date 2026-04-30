@@ -177,6 +177,20 @@ std::vector<EcmSensorEntry> EcmSensorExtractor::extract(
         }
       }
 
+      if (e.declaredTopic.empty() &&
+          (e.sensorType == "lidar" || e.sensorType == "gpu_lidar"))
+      {
+        gzdbg << "[BridgeManager] ECM lidar sensor missing SensorTopic: "
+              << "sensor=" << e.sensorName
+              << ", type=" << e.sensorType
+              << ", model=" << e.modelName
+              << ", link=" << (e.linkName.empty() ? "<direct-model-child>" : e.linkName)
+              << ", sensorEntity=" << sensorEnt
+              << ", components=Sensor,"
+              << (e.sensorType == "gpu_lidar" ? "GpuLidar" : "Lidar")
+              << ",ParentEntity,Name\n";
+      }
+
       result.push_back(std::move(e));
       return true;
     });

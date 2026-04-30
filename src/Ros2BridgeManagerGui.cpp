@@ -64,6 +64,10 @@ QVariantMap sensorToVariantMap(const DiscoveredSensor &ds)
   m[QStringLiteral("matchSource")]   = QString::fromLatin1(matchSourceName(ds.matchSource));
   m[QStringLiteral("nestedModel")]   = ds.sensor.nestedModel;
   m[QStringLiteral("resolved")]      = ds.resolved;
+  m[QStringLiteral("topicListed")]   = ds.topicListed;
+  m[QStringLiteral("topicInfoGzType")] = QString::fromStdString(ds.topicInfoGzType);
+  m[QStringLiteral("inferredGzType")]  = QString::fromStdString(ds.inferredGzType);
+  m[QStringLiteral("typeSource")]      = QString::fromStdString(ds.typeSource);
   m[QStringLiteral("warning")]       = QString::fromStdString(ds.warning);
   m[QStringLiteral("topicCount")]    = static_cast<int>(ds.matchedTopicNames.size());
 

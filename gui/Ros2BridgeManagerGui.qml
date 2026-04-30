@@ -48,8 +48,8 @@ Rectangle {
   }
 
   function matchSourceLabel(src) {
-    if (src === "ECM exact")     return "SensorTopic exact"
-    if (src === "ECM prefix")    return "SensorTopic prefix"
+    if (src === "ECM exact")     return "ECM SensorTopic"
+    if (src === "ECM prefix")    return "ECM SensorTopic"
     if (src === "ECM path")      return "Gazebo standard prefix"
     if (src === "Name match")    return "Name match"
     if (src === "Type fallback") return "Type-compatible fallback"
@@ -439,6 +439,33 @@ Rectangle {
                     text: "source: " + root.matchSourceLabel(sensorDel.sensorD.matchSource)
                     font.pixelSize: 8; font.italic: true
                     color: root.matchSourceColor(sensorDel.sensorD.matchSource)
+                  }
+                  Label {
+                    text: "sensor type: " + sensorDel.sensorD.sensorType
+                    font.pixelSize: 8; color: "#616161"
+                  }
+                  Label {
+                    visible: sensorDel.sensorD.declaredTopic.length > 0
+                    text: "TopicList contains Sensor Topic: " +
+                          (sensorDel.sensorD.topicListed ? "yes" : "no")
+                    font.pixelSize: 8; color: "#616161"
+                  }
+                  Label {
+                    visible: sensorDel.sensorD.typeSource.length > 0
+                    text: "type source: " + sensorDel.sensorD.typeSource
+                    font.pixelSize: 8; color: "#616161"
+                  }
+                  Label {
+                    visible: sensorDel.sensorD.topicInfoGzType.length > 0
+                    text: "TopicInfo type: " + sensorDel.sensorD.topicInfoGzType
+                    font.pixelSize: 8; font.family: "monospace"; color: "#424242"
+                    Layout.fillWidth: true; elide: Text.ElideMiddle
+                  }
+                  Label {
+                    visible: sensorDel.sensorD.inferredGzType.length > 0
+                    text: "inferred type: " + sensorDel.sensorD.inferredGzType
+                    font.pixelSize: 8; font.family: "monospace"; color: "#424242"
+                    Layout.fillWidth: true; elide: Text.ElideMiddle
                   }
                   Label {
                     visible: root.isWeakMatch(sensorDel.sensorD.matchSource)

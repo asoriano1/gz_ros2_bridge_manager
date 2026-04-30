@@ -21,6 +21,13 @@ GzTopicEntry makeEntry(const std::string &topic, const std::string &gzType,
   return e;
 }
 
+GzTopicEntry makeListedTopicWithoutType(const std::string &topic)
+{
+  GzTopicEntry e;
+  e.topicName = topic;
+  return e;
+}
+
 // Build a sensor with declaredTopic (SensorTopic component).
 EcmSensorEntry makeSensor(const std::string &model, const std::string &link,
                           const std::string &sensor, const std::string &type,
@@ -149,19 +156,28 @@ TEST(EcmTopicMatcher, ImuPrefixMatchesImuSuffix)
 }
 
 // ============================================================================
-// Test 5 — No advertised topic → unresolved with warning
+// Test 5 — Camera SensorTopic without TopicInfo still creates inferred Image row
 // ============================================================================
-TEST(EcmTopicMatcher, NoAdvertisedTopicIsUnresolved)
+TEST(EcmTopicMatcher, CameraSensorTopicWithoutTopicInfoUsesInferredImageType)
 {
-  BridgeTypeMapper mapper;
-  const std::string prefix =
-      "/world/default/model/robot/link/base/sensor/ghost";
+  const std::string topic =
+      "/sensor_test_robot_urdf_1/camera/image_raw";
 
-  EcmSensorEntry s = makeSensor("robot", "base", "ghost", "lidar", prefix);
+  EcmSensorEntry s = makeSensor("robot", "base", "camera_sensor", "camera", topic);
 
-  auto ds = EcmTopicMatcher::matchSensor(s, {});
-  EXPECT_FALSE(ds.resolved);
-  EXPECT_FALSE(ds.warning.empty());
+  auto ds = EcmTopicMatcher::matchSensor(s, {makeListedTopicWithoutType(topic)});
+  ASSERT_TRUE(ds.resolved);
+  EXPECT_EQ(ds.matchSource, MatchSource::EcmSensorTopicExact);
+  EXPECT_TRUE(ds.topicListed);
+  EXPECT_EQ(ds.typeSource, "type inferred");
+  EXPECT_EQ(ds.inferredGzType, "gz.msgs.Image");
+  ASSERT_EQ(ds.matchedTopicNames.size(), 1u);
+  EXPECT_EQ(ds.matchedTopicNames[0], topic);
+  ASSERT_EQ(ds.matchedBridgeSpecs.size(), 1u);
+  EXPECT_EQ(ds.matchedBridgeSpecs[0],
+            topic + "@sensor_msgs/msg/Image@gz.msgs.Image");
+  EXPECT_EQ(ds.warning,
+            "Topic type inferred from ECM sensor type; TopicInfo not available yet.");
 }
 
 // ============================================================================
@@ -354,18 +370,22 @@ TEST(EcmTopicMatcher, DeclaredTopicTakesPriorityOverFallback)
 }
 
 // ============================================================================
-// Test 15 — No match anywhere → matchSource stays Unresolved
+// Test 15 — IMU SensorTopic without TopicInfo still creates inferred Imu row
 // ============================================================================
-TEST(EcmTopicMatcher, MatchSourceUnresolvedWhenNoTopicsMatch)
+TEST(EcmTopicMatcher, ImuSensorTopicWithoutTopicInfoUsesInferredImuType)
 {
-  EcmSensorEntry s = makeSensorWithFallback(
-      "robot", "base", "ghost", "gpu_lidar",
-      "/world/default/model/robot/link/base/sensor/ghost");
-  s.declaredTopic = "/custom/ghost";
+  const std::string topic = "/sensor_test_robot_urdf_1/imu/data_raw";
+  EcmSensorEntry s = makeSensor("robot", "base", "imu_sensor", "imu", topic);
 
-  auto ds = EcmTopicMatcher::matchSensor(s, {});
-  EXPECT_FALSE(ds.resolved);
-  EXPECT_EQ(ds.matchSource, MatchSource::Unresolved);
+  auto ds = EcmTopicMatcher::matchSensor(s, {makeListedTopicWithoutType(topic)});
+  ASSERT_TRUE(ds.resolved);
+  EXPECT_EQ(ds.matchSource, MatchSource::EcmSensorTopicExact);
+  EXPECT_TRUE(ds.topicListed);
+  EXPECT_EQ(ds.typeSource, "type inferred");
+  EXPECT_EQ(ds.inferredGzType, "gz.msgs.IMU");
+  ASSERT_EQ(ds.matchedBridgeSpecs.size(), 1u);
+  EXPECT_EQ(ds.matchedBridgeSpecs[0],
+            topic + "@sensor_msgs/msg/Imu@gz.msgs.IMU");
 }
 
 // ============================================================================
@@ -634,48 +654,66 @@ TEST(EcmTopicMatcher, MultipleGenericCompatibleTopicsStayUnresolved)
 }
 
 // ============================================================================
-// Test 27 — SensorTopic must not fall back to unrelated type-compatible topics
+// Test 27 — Lidar SensorTopic without TopicInfo still creates inferred LaserScan row
 // ============================================================================
-TEST(EcmTopicMatcher, DeclaredTopicPreventsTypeCompatibleFallback)
+TEST(EcmTopicMatcher, LidarSensorTopicWithoutTopicInfoUsesInferredLaserScanType)
 {
-  BridgeTypeMapper mapper;
+  const std::string topic = "/sensor_test_robot_urdf_1/lidar";
+  EcmSensorEntry s = makeSensor("robot", "base", "lidar", "gpu_lidar", topic);
 
-  std::vector<GzTopicEntry> adv{
-    makeEntry("/some/unrelated/scan", "gz.msgs.LaserScan", mapper),
-  };
-
-  EcmSensorEntry s = makeSensor(
-      "robot", "base", "front_laser", "gpu_lidar", "/robot/front_laser");
-
-  auto ds = EcmTopicMatcher::matchSensor(s, adv);
-  EXPECT_FALSE(ds.resolved);
-  EXPECT_EQ(ds.matchSource, MatchSource::Unresolved);
-  EXPECT_TRUE(ds.matchedTopicNames.empty());
-  EXPECT_EQ(ds.warning, "Sensor Topic found but type not advertised yet");
+  auto ds = EcmTopicMatcher::matchSensor(s, {makeListedTopicWithoutType(topic)});
+  ASSERT_TRUE(ds.resolved);
+  EXPECT_EQ(ds.matchSource, MatchSource::EcmSensorTopicExact);
+  EXPECT_TRUE(ds.topicListed);
+  EXPECT_EQ(ds.typeSource, "type inferred");
+  EXPECT_EQ(ds.inferredGzType, "gz.msgs.LaserScan");
+  ASSERT_EQ(ds.matchedBridgeSpecs.size(), 1u);
+  EXPECT_EQ(ds.matchedBridgeSpecs[0],
+            topic + "@sensor_msgs/msg/LaserScan@gz.msgs.LaserScan");
 }
 
 // ============================================================================
-// Test 28 — matchAll keeps SensorTopic sensors unresolved until advertised
+// Test 28 — TopicInfo takes precedence over inferred types when available
 // ============================================================================
-TEST(EcmTopicMatcher, MatchAllSensorTopicWithoutAdvertisedTypeShowsPendingWarning)
+TEST(EcmTopicMatcher, AdvertisedTopicInfoTakesPrecedenceOverInference)
 {
   BridgeTypeMapper mapper;
+  const std::string topic = "/sensor_test_robot_urdf_1/camera/image_raw";
 
   std::vector<GzTopicEntry> adv{
-    makeEntry("/some/unrelated/scan", "gz.msgs.LaserScan", mapper),
+    makeListedTopicWithoutType(topic),
+    makeEntry(topic, "gz.msgs.Image", mapper),
   };
+
+  EcmSensorEntry s = makeSensor("robot", "base", "camera_sensor", "camera", topic);
+  auto ds = EcmTopicMatcher::matchSensor(s, adv);
+  ASSERT_TRUE(ds.resolved);
+  EXPECT_EQ(ds.typeSource, "advertised");
+  EXPECT_EQ(ds.topicInfoGzType, "gz.msgs.Image");
+  EXPECT_TRUE(ds.inferredGzType.empty());
+  ASSERT_EQ(ds.matchedBridgeSpecs.size(), 1u);
+  EXPECT_EQ(ds.matchedBridgeSpecs[0],
+            topic + "@sensor_msgs/msg/Image@gz.msgs.Image");
+}
+
+// ============================================================================
+// Test 29 — SensorTopic row is included in matchAll and excludes Additional-style fallback
+// ============================================================================
+TEST(EcmTopicMatcher, MatchAllUsesInferredSensorTopicRow)
+{
+  const std::string topic = "/sensor_test_robot_urdf_1/camera/image_raw";
 
   std::vector<EcmSensorEntry> sensors{
-    makeSensor("robot", "base", "front_laser", "gpu_lidar", "/robot/front_laser"),
+    makeSensor("robot", "base", "camera_sensor", "camera", topic),
   };
 
-  auto tree = EcmTopicMatcher::matchAll("default", sensors, "", adv);
+  auto tree = EcmTopicMatcher::matchAll(
+      "default", sensors, "", {makeListedTopicWithoutType(topic)});
   ASSERT_EQ(tree.sensors.size(), 1u);
-  EXPECT_FALSE(tree.sensors[0].resolved);
-  EXPECT_EQ(tree.sensors[0].matchSource, MatchSource::Unresolved);
-  EXPECT_TRUE(tree.sensors[0].matchedTopicNames.empty());
-  EXPECT_EQ(tree.sensors[0].warning,
-            "Sensor Topic found but type not advertised yet");
+  ASSERT_TRUE(tree.sensors[0].resolved);
+  EXPECT_EQ(tree.sensors[0].typeSource, "type inferred");
+  ASSERT_EQ(tree.sensors[0].matchedTopicNames.size(), 1u);
+  EXPECT_EQ(tree.sensors[0].matchedTopicNames[0], topic);
 }
 
 int main(int argc, char **argv)

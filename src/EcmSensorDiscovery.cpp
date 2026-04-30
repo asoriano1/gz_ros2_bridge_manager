@@ -75,6 +75,12 @@ std::string EcmTopicMatcher::defaultTopicPrefix(const std::string &worldName,
 namespace
 {
 
+struct InferredBridgeType
+{
+  std::string gzType;
+  std::string ros2Type;
+};
+
 // Returns true when `name` appears as an exact path segment in `topic`.
 // E.g. "lidar" in "/model/robot/lidar/scan" → true
 //      "lidar" in "/model/robotic/scan"      → false
@@ -117,6 +123,42 @@ bool containsDifferentModelPath(const std::string &topic,
     return false;
 
   return !containsModelPath(topic, modelName);
+}
+
+const GzTopicEntry *findExactTopicEntry(
+    const std::string &topic,
+    const std::vector<GzTopicEntry> &advertisedTopics)
+{
+  for (const auto &entry : advertisedTopics)
+  {
+    if (entry.topicName == topic)
+      return &entry;
+  }
+  return nullptr;
+}
+
+std::string gzTypeFromBridgeSpec(const std::string &spec)
+{
+  const auto at1 = spec.find('@');
+  if (at1 == std::string::npos)
+    return {};
+  const auto at2 = spec.find('@', at1 + 1);
+  if (at2 == std::string::npos || at2 + 1 >= spec.size())
+    return {};
+  return spec.substr(at2 + 1);
+}
+
+InferredBridgeType inferBridgeTypeForSensor(const std::string &sensorType)
+{
+  if (sensorType == "camera")
+    return {"gz.msgs.Image", "sensor_msgs/msg/Image"};
+  if (sensorType == "imu")
+    return {"gz.msgs.IMU", "sensor_msgs/msg/Imu"};
+  if (sensorType == "gpu_lidar" || sensorType == "lidar" || sensorType == "ray")
+    return {"gz.msgs.LaserScan", "sensor_msgs/msg/LaserScan"};
+  if (sensorType == "navsat" || sensorType == "gps")
+    return {"gz.msgs.NavSat", "sensor_msgs/msg/NavSatFix"};
+  return {};
 }
 
 // Returns the expected ROS 2 message types for a sensor type.
@@ -359,6 +401,12 @@ DiscoveredSensor EcmTopicMatcher::matchSensor(
   // Priority 1: declaredTopic (SensorTopic ECM component)
   if (!sensor.declaredTopic.empty())
   {
+    const GzTopicEntry *exactTopic =
+        findExactTopicEntry(sensor.declaredTopic, advertisedTopics);
+    result.topicListed = (exactTopic != nullptr);
+    if (exactTopic != nullptr)
+      result.topicInfoGzType = exactTopic->gzMsgType;
+
     auto ms = tryMatchPrefix(sensor.declaredTopic, sensor.sensorType,
                              advertisedTopics,
                              result.matchedTopicNames, result.matchedBridgeSpecs);
@@ -366,6 +414,34 @@ DiscoveredSensor EcmTopicMatcher::matchSensor(
     {
       result.matchSource = ms;
       result.resolved    = true;
+      result.typeSource  = "advertised";
+      if (result.topicInfoGzType.empty() && !result.matchedBridgeSpecs.empty())
+        result.topicInfoGzType = gzTypeFromBridgeSpec(result.matchedBridgeSpecs.front());
+      return result;
+    }
+
+    if (exactTopic == nullptr || exactTopic->gzMsgType.empty())
+    {
+      const auto inferred = inferBridgeTypeForSensor(sensor.sensorType);
+      if (!inferred.gzType.empty() && !inferred.ros2Type.empty())
+      {
+        result.matchedTopicNames.push_back(sensor.declaredTopic);
+        result.matchedBridgeSpecs.push_back(
+            sensor.declaredTopic + "@" + inferred.ros2Type + "@" + inferred.gzType);
+        result.resolved = true;
+        result.matchSource = MatchSource::EcmSensorTopicExact;
+        result.inferredGzType = inferred.gzType;
+        result.typeSource = "type inferred";
+        result.warning =
+            "Topic type inferred from ECM sensor type; TopicInfo not available yet.";
+        return result;
+      }
+    }
+
+    if (exactTopic != nullptr && !exactTopic->gzMsgType.empty())
+    {
+      result.warning =
+          "Sensor Topic type is not bridgeable with ros_gz_bridge.";
       return result;
     }
 
@@ -447,53 +523,41 @@ ModelSensorTree EcmTopicMatcher::matchAll(
   for (const auto &s : sensors)
   {
     DiscoveredSensor sensorResult;
-    sensorResult.sensor = s;
-
-    std::vector<std::string> strongTopics;
-    std::vector<std::string> strongSpecs;
-    MatchSource strongSource = MatchSource::Unresolved;
-
     if (!s.declaredTopic.empty())
     {
-      strongSource = tryMatchPrefix(
-          s.declaredTopic, s.sensorType, advertisedTopics,
-          strongTopics, strongSpecs);
+      sensorResult = matchSensor(s, advertisedTopics);
 
-      if (strongSource == MatchSource::Unresolved)
+      if (sensorResult.resolved)
       {
-        sensorResult.warning =
-            "Sensor Topic found but type not advertised yet";
+        const auto matchedTopics = sensorResult.matchedTopicNames;
+        const auto matchedSpecs = sensorResult.matchedBridgeSpecs;
+        sensorResult.matchedTopicNames.clear();
+        sensorResult.matchedBridgeSpecs.clear();
+
+        std::unordered_set<std::string> seenSpecs;
+        for (size_t i = 0; i < matchedTopics.size() && i < matchedSpecs.size(); ++i)
+        {
+          if (claimedTopics.count(matchedTopics[i]) > 0)
+            continue;
+
+          GzTopicEntry topic;
+          topic.topicName = matchedTopics[i];
+          topic.bridgeSpec = matchedSpecs[i];
+          appendTopicMatch(sensorResult, topic, seenSpecs, &claimedTopics);
+        }
+
+        if (sensorResult.matchedTopicNames.empty())
+        {
+          sensorResult.resolved = false;
+          sensorResult.warning =
+              "Matching topic was already claimed by another model.";
+        }
       }
     }
     else
     {
+      sensorResult.sensor = s;
       sensorResult.warning = "no Sensor Topic in ECM";
-    }
-
-    if (strongSource != MatchSource::Unresolved)
-    {
-      std::unordered_set<std::string> seenSpecs;
-      for (size_t i = 0; i < strongTopics.size() && i < strongSpecs.size(); ++i)
-      {
-        if (claimedTopics.count(strongTopics[i]) > 0)
-          continue;
-
-        GzTopicEntry topic;
-        topic.topicName = strongTopics[i];
-        topic.bridgeSpec = strongSpecs[i];
-        appendTopicMatch(sensorResult, topic, seenSpecs, &claimedTopics);
-      }
-
-      if (!sensorResult.matchedTopicNames.empty())
-      {
-        sensorResult.resolved = true;
-        sensorResult.matchSource = strongSource;
-      }
-      else
-      {
-        sensorResult.warning =
-            "Matching topic was already claimed by another model.";
-      }
     }
 
     allSensors.push_back(std::move(sensorResult));

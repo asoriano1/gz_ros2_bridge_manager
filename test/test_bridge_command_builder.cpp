@@ -181,6 +181,23 @@ TEST(BridgeCommandBuilder, AdditionalTopicAppearsInCommand)
   EXPECT_EQ(specs[1], "/clock@rosgraph_msgs/msg/Clock@gz.msgs.Clock");
 }
 
+TEST(BridgeCommandBuilder, IncludesInferredSensorTopicSpecWhenChecked)
+{
+  std::vector<BridgeTopicCandidate> cs{
+    make("/sensor_test_robot_urdf_1/camera/image_raw", true, true,
+         "/sensor_test_robot_urdf_1/camera/image_raw@sensor_msgs/msg/Image@gz.msgs.Image"),
+  };
+
+  const auto specs = BridgeCommandBuilder::selectedSpecs(cs);
+  ASSERT_EQ(specs.size(), 1u);
+  EXPECT_EQ(specs[0],
+            "/sensor_test_robot_urdf_1/camera/image_raw@sensor_msgs/msg/Image@gz.msgs.Image");
+
+  const std::string cmd = BridgeCommandBuilder::buildCommand(cs);
+  EXPECT_NE(cmd.find("/sensor_test_robot_urdf_1/camera/image_raw@sensor_msgs/msg/Image@gz.msgs.Image"),
+            std::string::npos);
+}
+
 int main(int argc, char **argv)
 {
   ::testing::InitGoogleTest(&argc, argv);

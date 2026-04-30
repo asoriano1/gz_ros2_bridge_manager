@@ -51,6 +51,10 @@ struct DiscoveredSensor
   std::vector<std::string> matchedBridgeSpecs; // bridgeable specs only
   bool resolved = false;
   MatchSource matchSource = MatchSource::Unresolved;
+  bool topicListed = false;         // SensorTopic appeared in TopicList
+  std::string topicInfoGzType;      // exact TopicInfo type when available
+  std::string inferredGzType;       // inferred bridge gz type when TopicInfo missing
+  std::string typeSource;           // "advertised" or "type inferred"
   std::string warning;
 };
 
