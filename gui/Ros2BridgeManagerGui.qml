@@ -13,31 +13,51 @@ Rectangle {
   Layout.minimumHeight: 320
   Layout.preferredHeight: 700
 
+  // Expansion state stored outside Repeater delegates so it survives
+  // modelCards rebuilds triggered by checkbox toggles.
+  property var expandedModels: ({})
+
+  // Debug mode: off by default; shows source, fallback path, match warnings.
+  property bool debugMode: false
+
   // Show models with no ECM sensors (hidden by default).
   property bool showModelsWithoutSensors: false
 
-  // Computed from C++ modelCards, filtered by showModelsWithoutSensors.
+  // Filtered model card list for the accordion Repeater.
   property var visibleCards: {
     if (showModelsWithoutSensors) return bridgeManager.modelCards
     return bridgeManager.modelCards.filter(function(c) { return c.ecmSensorCount > 0 })
   }
 
-  // ---- JS helpers --------------------------------------------------------
-
-  // New matchSourceName() strings are already user-friendly — pass through.
-  function matchSourceLabel(src) { return src }
-
-  function matchSourceColor(src) {
-    if (src === "ECM exact")     return "#0d47a1";
-    if (src === "ECM prefix")    return "#1565c0";
-    if (src === "ECM path")      return "#1976d2";
-    if (src === "Name match")    return "#e65100";
-    if (src === "Type fallback") return "#f57c00";
-    if (src === "Unresolved")    return "#bf360c";
-    return "#757575";
+  // Reassign the whole map object to trigger QML binding updates.
+  function setModelExpanded(name, val) {
+    var m = {}
+    for (var k in expandedModels) m[k] = expandedModels[k]
+    m[name] = val
+    expandedModels = m
   }
 
-  // ---- TopicRow: used by Additional and Unsupported sections -------------
+  function isWeakMatch(src) {
+    return src === "Name match" || src === "Type fallback"
+  }
+
+  function typeMappingLabel(gzType, ros2Type) {
+    var gz = gzType && gzType.length > 0 ? gzType.replace("gz.msgs.", "") : ""
+    if (gz && ros2Type) return gz + " → " + ros2Type
+    return ros2Type || gz || "?"
+  }
+
+  function matchSourceColor(src) {
+    if (src === "ECM exact")     return "#0d47a1"
+    if (src === "ECM prefix")    return "#1565c0"
+    if (src === "ECM path")      return "#1976d2"
+    if (src === "Name match")    return "#e65100"
+    if (src === "Type fallback") return "#f57c00"
+    if (src === "Unresolved")    return "#bf360c"
+    return "#757575"
+  }
+
+  // ---- TopicRow: used by Additional and Unsupported sections only ---------
   component TopicRow: Rectangle {
     id: rowRoot
     property var    entry
@@ -45,7 +65,7 @@ Rectangle {
     property bool   checkable: true
 
     width: ListView.view ? ListView.view.width : implicitWidth
-    height: 30
+    height: 28
     color: index % 2 === 0 ? "#ffffff" : "#f5f5f5"
 
     RowLayout {
@@ -54,8 +74,7 @@ Rectangle {
 
       CheckBox {
         Layout.alignment: Qt.AlignVCenter
-        Layout.preferredWidth: 22
-        padding: 0
+        Layout.preferredWidth: 22; padding: 0
         checked: entry.checked
         enabled: rowRoot.checkable && entry.bridgeable
         onToggled: {
@@ -66,55 +85,20 @@ Rectangle {
         }
       }
 
-      Item {
-        Layout.preferredWidth: 14
-        Layout.alignment: Qt.AlignVCenter
-        height: 14
-        Label {
-          anchors.centerIn: parent
-          font.pixelSize: 10
-          text: entry.ambiguous ? "?" : (entry.isGeneric ? "*" : "")
-          color: entry.ambiguous ? "#c62828" : "#1565c0"
-          font.bold: true
-        }
-      }
-
       Label {
         text: entry.topic
         font.pixelSize: 10; font.family: "monospace"
-        elide: Text.ElideMiddle
-        Layout.fillWidth: true
-        Layout.preferredWidth: 140
-        ToolTip.visible: topicHover.containsMouse
-        ToolTip.text: entry.warning && entry.warning.length > 0
-                      ? entry.topic + "\n" + entry.warning
-                      : entry.topic
-        ToolTip.delay: 400
-        MouseArea {
-          id: topicHover
-          anchors.fill: parent
-          hoverEnabled: true
-          acceptedButtons: Qt.NoButton
-        }
+        elide: Text.ElideLeft; Layout.fillWidth: true
+        ToolTip.visible: th.containsMouse; ToolTip.text: entry.topic; ToolTip.delay: 400
+        MouseArea { id: th; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
       }
 
       Label {
-        text: {
-          var t = entry.gzType
-          return t && t.length > 0 ? t.replace("gz.msgs.", "") : "?"
-        }
-        font.pixelSize: 10; font.family: "monospace"
-        color: "#1565c0"
-        elide: Text.ElideRight
-        Layout.preferredWidth: 90
-      }
-
-      Label {
-        text: entry.confidence || ""
-        font.pixelSize: 9; font.italic: true
-        color: "#757575"
-        elide: Text.ElideRight
-        Layout.preferredWidth: 100
+        text: root.typeMappingLabel(entry.gzType, entry.ros2Type)
+        font.pixelSize: 9; color: "#5d4037"
+        elide: Text.ElideRight; Layout.preferredWidth: 130
+        ToolTip.visible: typeHover.containsMouse; ToolTip.text: text; ToolTip.delay: 300
+        MouseArea { id: typeHover; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
       }
     }
   }
@@ -146,7 +130,17 @@ Rectangle {
         }
 
         CheckBox {
-          text: "All models"
+          text: "Debug/details"
+          font.pixelSize: 10; padding: 4
+          checked: root.debugMode
+          onToggled: root.debugMode = checked
+          ToolTip.visible: hovered
+          ToolTip.text: "Show match source, declared topic, fallback path, and warnings"
+          ToolTip.delay: 400
+        }
+
+        CheckBox {
+          text: "All"
           font.pixelSize: 10; padding: 4
           checked: root.showModelsWithoutSensors
           onToggled: root.showModelsWithoutSensors = checked
@@ -191,14 +185,12 @@ Rectangle {
           spacing: 8
 
           BusyIndicator {
-            running: bridgeManager.busy
-            visible: bridgeManager.busy
+            running: bridgeManager.busy; visible: bridgeManager.busy
             width: 16; height: 16
           }
 
           Label {
-            text: bridgeManager.statusText
-            font.pixelSize: 11
+            text: bridgeManager.statusText; font.pixelSize: 11
             color: bridgeManager.worldName.length > 0 ? "#1b5e20" : "#b71c1c"
             wrapMode: Text.Wrap; Layout.fillWidth: true
           }
@@ -215,16 +207,13 @@ Rectangle {
       Rectangle {
         Layout.leftMargin: 10; Layout.rightMargin: 10
         Layout.fillWidth: true
-        implicitHeight: globalWarnLabel.implicitHeight + 12
+        implicitHeight: gwLabel.implicitHeight + 12
         color: "#fff3e0"; border.color: "#ef6c00"; border.width: 1; radius: 4
         visible: bridgeManager.warnings.length > 0
 
         Label {
-          id: globalWarnLabel
-          anchors {
-            top: parent.top; left: parent.left; right: parent.right
-            topMargin: 6; leftMargin: 8; rightMargin: 8
-          }
+          id: gwLabel
+          anchors { top: parent.top; left: parent.left; right: parent.right; topMargin: 6; leftMargin: 8; rightMargin: 8 }
           text: "⚠ " + bridgeManager.warnings.join("\n⚠ ")
           font.pixelSize: 10; color: "#bf360c"; wrapMode: Text.Wrap
         }
@@ -238,275 +227,214 @@ Rectangle {
           id: modelCard
           Layout.leftMargin: 10; Layout.rightMargin: 10
           Layout.fillWidth: true
-          implicitHeight: modelCardCol.implicitHeight + 16
-          color: "#fafafa"
-          border.color: "#e0e0e0"; border.width: 1
-          radius: 4
+          implicitHeight: mcCol.implicitHeight + 16
+          color: "#fafafa"; border.color: "#e0e0e0"; border.width: 1; radius: 4
 
-          // Save outer modelData before inner Repeaters shadow it.
+          // Pin modelData and read expansion from persistent root map.
           property var  cardData: modelData
-          property bool expanded: false
+          property bool expanded: root.expandedModels[cardData.modelName] === true
 
           ColumnLayout {
-            id: modelCardCol
-            anchors {
-              top: parent.top; left: parent.left; right: parent.right
-              topMargin: 8; leftMargin: 8; rightMargin: 8
-            }
+            id: mcCol
+            anchors { top: parent.top; left: parent.left; right: parent.right; topMargin: 8; leftMargin: 8; rightMargin: 8 }
             spacing: 4
 
-            // Card header — click anywhere to expand / collapse.
-            Item {
-              Layout.fillWidth: true
-              implicitHeight: cardHeaderRow.implicitHeight + 4
+            // ── Card header ───────────────────────────────────────────
+            RowLayout {
+              Layout.fillWidth: true; spacing: 6
 
-              RowLayout {
-                id: cardHeaderRow
-                anchors { left: parent.left; right: parent.right }
-                spacing: 6
+              // Only the arrow+name Label triggers expand/collapse;
+              // Reset button and ECM dot handle their own clicks.
+              Label {
+                text: (modelCard.expanded ? "▼" : "▶") + "  " + modelCard.cardData.modelName
+                font.bold: true; font.pixelSize: 12; color: "#212121"
+                Layout.fillWidth: true; elide: Text.ElideRight
 
-                Label {
-                  text: (modelCard.expanded ? "▼" : "▶") + "  " +
-                        modelCard.cardData.modelName
-                  font.bold: true; font.pixelSize: 12; color: "#212121"
-                  Layout.fillWidth: true; elide: Text.ElideRight
-                }
-
-                // ECM dot — green if sensors found, grey otherwise.
-                Rectangle {
-                  width: 8; height: 8; radius: 4
-                  color: modelCard.cardData.ecmAvailable ? "#43a047" : "#bdbdbd"
-                  ToolTip.visible: dotHover.containsMouse
-                  ToolTip.text: modelCard.cardData.ecmAvailable
-                                ? modelCard.cardData.ecmSensorCount + " ECM sensor(s)"
-                                : "No ECM sensors detected"
-                  ToolTip.delay: 400
-                  MouseArea {
-                    id: dotHover; anchors.fill: parent
-                    hoverEnabled: true; acceptedButtons: Qt.NoButton
-                  }
-                }
-
-                Label {
-                  text: {
-                    var sel = modelCard.cardData.selectedTopicCount
-                    return sel + " selected"
-                  }
-                  font.pixelSize: 10; color: "#616161"
-                }
-
-                Button {
-                  text: "Reset"; font.pixelSize: 9
-                  implicitWidth: 48; implicitHeight: 22
-                  ToolTip.visible: hovered
-                  ToolTip.text: "Reset this model's selections to ECM defaults"
-                  ToolTip.delay: 400
-                  onClicked: bridgeManager.resetModelSelection(modelCard.cardData.modelName)
+                MouseArea {
+                  anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                  onClicked: root.setModelExpanded(
+                      modelCard.cardData.modelName, !modelCard.expanded)
                 }
               }
 
-              MouseArea {
-                anchors.fill: parent
-                cursorShape: Qt.PointingHandCursor
-                onClicked: modelCard.expanded = !modelCard.expanded
+              Rectangle {
+                width: 8; height: 8; radius: 4
+                color: modelCard.cardData.ecmAvailable ? "#43a047" : "#bdbdbd"
+                ToolTip.visible: dotHov.containsMouse
+                ToolTip.text: modelCard.cardData.ecmAvailable
+                              ? modelCard.cardData.ecmSensorCount + " ECM sensor(s)"
+                              : "No ECM sensors"
+                ToolTip.delay: 400
+                MouseArea { id: dotHov; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
+              }
+
+              Label {
+                text: modelCard.cardData.selectedTopicCount + " selected"
+                font.pixelSize: 10; color: "#616161"
+              }
+
+              Button {
+                text: "Reset"; font.pixelSize: 9
+                implicitWidth: 48; implicitHeight: 22
+                ToolTip.visible: hovered; ToolTip.delay: 400
+                ToolTip.text: "Reset topic selections to ECM defaults"
+                onClicked: bridgeManager.resetModelSelection(modelCard.cardData.modelName)
               }
             }
 
-            // ---- Expanded body: ECM sensor cards --------------------
-
+            // ── Expanded body: compact sensor+topic rows ──────────────
+            //
+            // One ColumnLayout per sensor; inside it: one RowLayout per
+            // matched topic, plus an unresolved row and optional debug block.
             Repeater {
               model: modelCard.expanded && modelCard.cardData.ecmSensorCount > 0
                      ? modelCard.cardData.sensors : []
 
-              delegate: Rectangle {
-                id: sensorCard
+              delegate: ColumnLayout {
+                id: sensorDel
+                property var sensorD: modelData
+                // Capture sensor index before the inner Repeater overrides `index`.
+                property int sensorIdx: index
                 Layout.fillWidth: true
-                implicitHeight: sensorCol.implicitHeight + 10
-                radius: 3
-                border.width: 1
+                spacing: 0
 
-                // Pin outer modelData before the inner topic Repeater.
-                property var sensorData: modelData
+                // ── Compact topic rows ──────────────────────────────
+                Repeater {
+                  model: sensorDel.sensorD.matchedTopicDetails
 
-                // Strong ECM match → green; weak match → orange; unresolved → yellow.
-                property bool strongMatch: {
-                  var ms = sensorCard.sensorData.matchSource
-                  return ms === "ECM exact" || ms === "ECM prefix" || ms === "ECM path"
+                  delegate: RowLayout {
+                    Layout.fillWidth: true; Layout.preferredHeight: 24; spacing: 4
+
+                    CheckBox {
+                      padding: 0; Layout.preferredWidth: 22
+                      Layout.alignment: Qt.AlignVCenter
+                      checked: modelData.checked; enabled: modelData.bridgeable
+                      onToggled: bridgeManager.setTopicChecked(
+                                     modelCard.cardData.modelName, modelData.topic, checked)
+                    }
+
+                    Label {
+                      text: sensorDel.sensorD.sensorName
+                      font.pixelSize: 9; font.bold: true; font.family: "monospace"; color: "#1b5e20"
+                      Layout.preferredWidth: 96; elide: Text.ElideRight
+                    }
+
+                    Label {
+                      text: modelData.topic
+                      font.pixelSize: 9; font.family: "monospace"; color: "#33691e"
+                      Layout.fillWidth: true; elide: Text.ElideLeft
+                      ToolTip.visible: tpHov.containsMouse; ToolTip.text: modelData.topic; ToolTip.delay: 300
+                      MouseArea { id: tpHov; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
+                    }
+
+                    Label {
+                      text: root.typeMappingLabel(modelData.gzType, modelData.ros2Type)
+                      font.pixelSize: 8; color: "#5d4037"
+                      elide: Text.ElideRight; Layout.preferredWidth: 190
+                      ToolTip.visible: typeMapHover.containsMouse
+                      ToolTip.text: text
+                      ToolTip.delay: 300
+                      MouseArea {
+                        id: typeMapHover
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        acceptedButtons: Qt.NoButton
+                      }
+                    }
+
+                    Label {
+                      visible: !root.debugMode && root.isWeakMatch(sensorDel.sensorD.matchSource)
+                      text: "verify"
+                      font.pixelSize: 8; font.italic: true; color: "#e65100"
+                      Layout.preferredWidth: 34
+                    }
+                  }
+                }  // topic Repeater
+
+                // ── Unresolved row (sensor has no matched topics) ─────
+                RowLayout {
+                  visible: !sensorDel.sensorD.resolved &&
+                           sensorDel.sensorD.matchedTopicDetails.length === 0
+                  Layout.fillWidth: true; Layout.preferredHeight: 22; spacing: 4
+
+                  Label { text: "⚠"; font.pixelSize: 10; color: "#bf360c"; Layout.preferredWidth: 14 }
+                  Label {
+                    text: sensorDel.sensorD.sensorName
+                    font.pixelSize: 9; font.bold: true; font.family: "monospace"; color: "#bf360c"
+                    Layout.preferredWidth: 90; elide: Text.ElideRight
+                  }
+                  Label {
+                    text: "no advertised topic found"
+                    font.pixelSize: 9; font.italic: true; color: "#757575"
+                    Layout.fillWidth: true
+                  }
                 }
 
-                color:        strongMatch ? "#f1f8e9"
-                              : (sensorData.resolved ? "#fff3e0" : "#fff8e1")
-                border.color: strongMatch ? "#a5d6a7"
-                              : (sensorData.resolved ? "#ffcc80" : "#ffe082")
-
+                // ── Debug block (visible when Debug mode is on) ──────
                 ColumnLayout {
-                  id: sensorCol
-                  anchors {
-                    left: parent.left; right: parent.right; top: parent.top
-                    leftMargin: 6; rightMargin: 6; topMargin: 4
-                  }
-                  spacing: 2
+                  visible: root.debugMode
+                  Layout.fillWidth: true; Layout.leftMargin: 30; spacing: 1
 
-                  // Identity: link / sensor  [type]  [nested?]
-                  RowLayout {
-                    Layout.fillWidth: true; spacing: 4
-
-                    Label {
-                      text: sensorCard.sensorData.linkName + " / " +
-                            sensorCard.sensorData.sensorName
-                      font.pixelSize: 10; font.bold: true; font.family: "monospace"
-                      color: "#1b5e20"; Layout.fillWidth: true; elide: Text.ElideRight
-                    }
-                    Label {
-                      text: sensorCard.sensorData.sensorType
-                      font.pixelSize: 9; font.italic: true; color: "#388e3c"
-                    }
-                    Label {
-                      visible: sensorCard.sensorData.nestedModel
-                      text: "nested"
-                      font.pixelSize: 8; font.italic: true; color: "#1565c0"
-                    }
-                  }
-
-                  // Match source
                   Label {
-                    visible: sensorCard.sensorData.resolved
-                    text: "source: " + root.matchSourceLabel(sensorCard.sensorData.matchSource)
-                    font.pixelSize: 9; font.italic: true
-                    color: root.matchSourceColor(sensorCard.sensorData.matchSource)
+                    text: "source: " + sensorDel.sensorD.matchSource
+                    font.pixelSize: 8; font.italic: true
+                    color: root.matchSourceColor(sensorDel.sensorD.matchSource)
                   }
-
-                  // Declared topic or fallback path
                   Label {
-                    visible: sensorCard.sensorData.declaredTopic.length > 0
-                    text: "topic: " + sensorCard.sensorData.declaredTopic
-                    font.pixelSize: 9; font.family: "monospace"; color: "#424242"
+                    visible: root.isWeakMatch(sensorDel.sensorD.matchSource)
+                    text: "match detail: weak automatic match"
+                    font.pixelSize: 8; font.italic: true; color: "#e65100"
+                  }
+                  Label {
+                    visible: sensorDel.sensorD.declaredTopic.length > 0
+                    text: "declared: " + sensorDel.sensorD.declaredTopic
+                    font.pixelSize: 8; font.family: "monospace"; color: "#424242"
                     Layout.fillWidth: true; elide: Text.ElideMiddle
-                    ToolTip.visible: dtHover.containsMouse
-                    ToolTip.text: sensorCard.sensorData.declaredTopic
-                    ToolTip.delay: 300
-                    MouseArea {
-                      id: dtHover; anchors.fill: parent
-                      hoverEnabled: true; acceptedButtons: Qt.NoButton
-                    }
+                    ToolTip.visible: dclHov.containsMouse; ToolTip.text: sensorDel.sensorD.declaredTopic; ToolTip.delay: 300
+                    MouseArea { id: dclHov; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
                   }
                   Label {
-                    visible: sensorCard.sensorData.declaredTopic.length === 0 &&
-                             sensorCard.sensorData.fallbackPrefix.length > 0
-                    text: "path: " + sensorCard.sensorData.fallbackPrefix
-                    font.pixelSize: 9; font.family: "monospace"; color: "#616161"
+                    visible: sensorDel.sensorD.declaredTopic.length === 0 &&
+                             sensorDel.sensorD.fallbackPrefix.length > 0
+                    text: "path: " + sensorDel.sensorD.fallbackPrefix
+                    font.pixelSize: 8; font.family: "monospace"; color: "#616161"
                     Layout.fillWidth: true; elide: Text.ElideMiddle
-                    ToolTip.visible: fpHover.containsMouse
-                    ToolTip.text: sensorCard.sensorData.fallbackPrefix
-                    ToolTip.delay: 300
-                    MouseArea {
-                      id: fpHover; anchors.fill: parent
-                      hoverEnabled: true; acceptedButtons: Qt.NoButton
-                    }
+                    ToolTip.visible: fpHov.containsMouse; ToolTip.text: sensorDel.sensorD.fallbackPrefix; ToolTip.delay: 300
+                    MouseArea { id: fpHov; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
                   }
-
-                  // Column header row for per-topic list
-                  RowLayout {
-                    visible: sensorCard.sensorData.matchedTopicDetails.length > 0
-                    Layout.fillWidth: true; Layout.leftMargin: 26; spacing: 3
-
-                    Label {
-                      text: "Gazebo topic"
-                      font.pixelSize: 8; font.bold: true; color: "#9e9e9e"
-                      Layout.fillWidth: true
-                    }
-                    Label {
-                      text: "gz → ros2 type"
-                      font.pixelSize: 8; font.bold: true; color: "#9e9e9e"
-                      Layout.preferredWidth: 155
-                    }
-                  }
-
-                  // Per-topic rows (checked state embedded in matchedTopicDetails)
-                  Repeater {
-                    model: sensorCard.sensorData.matchedTopicDetails
-
-                    delegate: RowLayout {
-                      id: tdRow
-                      Layout.fillWidth: true; Layout.leftMargin: 8; spacing: 3
-
-                      property string tdTopic: modelData.topic
-
-                      CheckBox {
-                        padding: 0
-                        Layout.preferredWidth: 22
-                        Layout.alignment: Qt.AlignVCenter
-                        checked: modelData.checked
-                        enabled: modelData.bridgeable
-                        onToggled: bridgeManager.setTopicChecked(
-                                       modelCard.cardData.modelName,
-                                       tdRow.tdTopic, checked)
-                      }
-
-                      Label {
-                        text: modelData.topic
-                        font.pixelSize: 9; font.family: "monospace"; color: "#33691e"
-                        Layout.fillWidth: true; elide: Text.ElideMiddle
-                        ToolTip.visible: tdHover.containsMouse
-                        ToolTip.text: modelData.topic; ToolTip.delay: 300
-                        MouseArea {
-                          id: tdHover; anchors.fill: parent
-                          hoverEnabled: true; acceptedButtons: Qt.NoButton
-                        }
-                      }
-
-                      Label {
-                        text: modelData.gzType.replace("gz.msgs.", "")
-                        font.pixelSize: 8; color: "#1565c0"
-                        elide: Text.ElideRight; Layout.preferredWidth: 72
-                      }
-
-                      Label { text: "→"; font.pixelSize: 8; color: "#9e9e9e" }
-
-                      Label {
-                        text: {
-                          var parts = modelData.ros2Type.split("/")
-                          return parts.length > 0 ? parts[parts.length - 1] : modelData.ros2Type
-                        }
-                        font.pixelSize: 8; color: "#5d4037"
-                        elide: Text.ElideRight; Layout.preferredWidth: 80
-                      }
-                    }
-                  }
-
-                  // Sensor warning — orange for weak match, red for truly unresolved.
                   Label {
-                    visible: sensorCard.sensorData.warning.length > 0
-                    text: "⚠ " + sensorCard.sensorData.warning
-                    font.pixelSize: 9; font.italic: true
-                    color: sensorCard.sensorData.resolved ? "#e65100" : "#bf360c"
-                    wrapMode: Text.Wrap; Layout.fillWidth: true
+                    visible: sensorDel.sensorD.warning.length > 0
+                    text: "⚠ " + sensorDel.sensorD.warning
+                    font.pixelSize: 8; font.italic: true; wrapMode: Text.Wrap
+                    color: sensorDel.sensorD.resolved ? "#e65100" : "#bf360c"
+                    Layout.fillWidth: true
                   }
-
-                  Item { implicitHeight: 2 }
                 }
-              }
-            }
 
-            // ECM unavailable banner (inside card body, when model has no ECM data)
+                // Thin divider between sensors (not after the last one).
+                Rectangle {
+                  visible: sensorDel.sensorIdx < modelCard.cardData.ecmSensorCount - 1
+                  Layout.fillWidth: true; height: 1; color: "#e8e8e8"
+                }
+              }  // sensorDel ColumnLayout
+            }  // sensor Repeater
+
+            // ECM unavailable banner
             Rectangle {
               Layout.fillWidth: true
-              implicitHeight: ecmUnavailLabel.implicitHeight + 10
+              implicitHeight: ecuLabel.implicitHeight + 10
               color: "#fff8e1"; border.color: "#ffe082"; border.width: 1; radius: 3
               visible: modelCard.expanded && !modelCard.cardData.ecmAvailable
 
               Label {
-                id: ecmUnavailLabel
-                anchors {
-                  left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter
-                  leftMargin: 6; rightMargin: 6
-                }
+                id: ecuLabel
+                anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; leftMargin: 6; rightMargin: 6 }
                 text: "⚠ No ECM sensors detected for this model."
                 font.pixelSize: 10; color: "#f57f17"; wrapMode: Text.Wrap
               }
             }
 
-          }  // modelCardCol
+          }  // mcCol
         }  // modelCard Rectangle
       }  // Repeater visibleCards
 
@@ -515,7 +443,7 @@ Rectangle {
         id: cmdCard
         Layout.leftMargin: 10; Layout.rightMargin: 10
         Layout.fillWidth: true
-        implicitHeight: cmdCardCol.implicitHeight + 16
+        implicitHeight: cmdCol.implicitHeight + 16
         color: bridgeManager.bridgeCommand.length > 0 ? "#e8f5e9" : "#f5f5f5"
         border.color: bridgeManager.bridgeCommand.length > 0 ? "#66bb6a" : "#bdbdbd"
         border.width: 1; radius: 4
@@ -523,14 +451,10 @@ Rectangle {
         property bool expanded: false
 
         ColumnLayout {
-          id: cmdCardCol
-          anchors {
-            top: parent.top; left: parent.left; right: parent.right
-            topMargin: 8; leftMargin: 8; rightMargin: 8
-          }
+          id: cmdCol
+          anchors { top: parent.top; left: parent.left; right: parent.right; topMargin: 8; leftMargin: 8; rightMargin: 8 }
           spacing: 6
 
-          // Header row (always visible) — click label area to toggle.
           Item {
             Layout.fillWidth: true
             implicitHeight: cmdHeaderRow.implicitHeight
@@ -540,16 +464,28 @@ Rectangle {
               anchors { left: parent.left; right: parent.right }
               spacing: 6
 
-              Label {
-                text: {
-                  var n = bridgeManager.selectedBridgeTopicCount
-                  var arrow = cmdCard.expanded ? "▼" : "▶"
-                  return arrow + "  Bridge command  •  " + n + " topic" +
-                         (n === 1 ? "" : "s") + " selected"
+              Item {
+                Layout.fillWidth: true
+                implicitHeight: cmdTitle.implicitHeight
+
+                Label {
+                  id: cmdTitle
+                  anchors { left: parent.left; right: parent.right }
+                  text: {
+                    var n = bridgeManager.selectedBridgeTopicCount
+                    return (cmdCard.expanded ? "▼" : "▶") + "  Bridge command  •  " +
+                           n + " topic" + (n === 1 ? "" : "s") + " selected"
+                  }
+                  font.bold: true; font.pixelSize: 12
+                  color: bridgeManager.bridgeCommand.length > 0 ? "#1b5e20" : "#757575"
+                  elide: Text.ElideRight
                 }
-                font.bold: true; font.pixelSize: 12
-                color: bridgeManager.bridgeCommand.length > 0 ? "#1b5e20" : "#757575"
-                Layout.fillWidth: true; elide: Text.ElideRight
+
+                MouseArea {
+                  anchors.fill: parent
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: cmdCard.expanded = !cmdCard.expanded
+                }
               }
 
               Button {
@@ -559,14 +495,8 @@ Rectangle {
                 onClicked: bridgeManager.copyBridgeCommand()
               }
             }
-
-            MouseArea {
-              anchors { left: parent.left; right: parent.right; top: parent.top; bottom: parent.bottom }
-              onClicked: cmdCard.expanded = !cmdCard.expanded
-            }
           }
 
-          // Command display (shown when expanded)
           Rectangle {
             visible: cmdCard.expanded
             Layout.fillWidth: true
@@ -579,8 +509,7 @@ Rectangle {
 
             Flickable {
               anchors { fill: parent; margins: 5 }
-              contentHeight: cmdLabel.implicitHeight
-              clip: true
+              contentHeight: cmdLabel.implicitHeight; clip: true
               visible: bridgeManager.bridgeCommand.length > 0
 
               Label {
@@ -616,15 +545,11 @@ Rectangle {
 
         ColumnLayout {
           id: addCol
-          anchors {
-            top: parent.top; left: parent.left; right: parent.right
-            topMargin: 8; leftMargin: 8; rightMargin: 8
-          }
+          anchors { top: parent.top; left: parent.left; right: parent.right; topMargin: 8; leftMargin: 8; rightMargin: 8 }
           spacing: 4
 
           Item {
-            Layout.fillWidth: true
-            implicitHeight: addHeader.implicitHeight + 4
+            Layout.fillWidth: true; implicitHeight: addHeader.implicitHeight + 4
 
             Label {
               id: addHeader
@@ -633,10 +558,7 @@ Rectangle {
                     bridgeManager.additionalBridgeableTopics.length + ")"
               font.bold: true; font.pixelSize: 12; color: "#e65100"
             }
-            MouseArea {
-              anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-              onClicked: additionalCard.expanded = !additionalCard.expanded
-            }
+            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: additionalCard.expanded = !additionalCard.expanded }
           }
 
           Label {
@@ -649,16 +571,12 @@ Rectangle {
           ListView {
             visible: additionalCard.expanded
             Layout.fillWidth: true
-            implicitHeight: Math.min(count * 30, 240)
+            implicitHeight: Math.min(count * 28, 240)
             clip: true; interactive: true
             ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
             model: bridgeManager.additionalBridgeableTopics
-            delegate: TopicRow {
-              entry: modelData
-              modelName: ""   // → setAdditionalTopicChecked
-              checkable: true
-            }
+            delegate: TopicRow { entry: modelData; modelName: ""; checkable: true }
           }
         }
       }
@@ -676,15 +594,11 @@ Rectangle {
 
         ColumnLayout {
           id: unsupCol
-          anchors {
-            top: parent.top; left: parent.left; right: parent.right
-            topMargin: 8; leftMargin: 8; rightMargin: 8
-          }
+          anchors { top: parent.top; left: parent.left; right: parent.right; topMargin: 8; leftMargin: 8; rightMargin: 8 }
           spacing: 4
 
           Item {
-            Layout.fillWidth: true
-            implicitHeight: unsupHeader.implicitHeight + 4
+            Layout.fillWidth: true; implicitHeight: unsupHeader.implicitHeight + 4
 
             Label {
               id: unsupHeader
@@ -693,16 +607,13 @@ Rectangle {
                     bridgeManager.unsupportedTopics.length + ")"
               font.bold: true; font.pixelSize: 12; color: "#757575"
             }
-            MouseArea {
-              anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-              onClicked: unsupCard.expanded = !unsupCard.expanded
-            }
+            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: unsupCard.expanded = !unsupCard.expanded }
           }
 
           ListView {
             visible: unsupCard.expanded
             Layout.fillWidth: true
-            implicitHeight: Math.min(count * 30, 200)
+            implicitHeight: Math.min(count * 28, 200)
             clip: true; interactive: true
             ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
@@ -725,10 +636,7 @@ Rectangle {
 
         Label {
           id: emptyLabel
-          anchors {
-            top: parent.top; left: parent.left; right: parent.right
-            topMargin: 10; leftMargin: 10; rightMargin: 10
-          }
+          anchors { top: parent.top; left: parent.left; right: parent.right; topMargin: 10; leftMargin: 10; rightMargin: 10 }
           text: "Press Refresh to discover Gazebo worlds and topics.\n" +
                 "Make sure gz sim is running."
           font.pixelSize: 12; color: "#9e9e9e"
