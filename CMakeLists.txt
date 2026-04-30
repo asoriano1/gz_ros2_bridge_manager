@@ -94,6 +94,11 @@ install(DIRECTORY config/
   OPTIONAL
 )
 
+install(DIRECTORY worlds/
+  DESTINATION share/${PROJECT_NAME}/worlds
+  FILES_MATCHING PATTERN "*.sdf"
+)
+
 ament_environment_hooks(
   "${CMAKE_CURRENT_SOURCE_DIR}/env-hooks/gz_ros2_bridge_manager.sh.in"
 )

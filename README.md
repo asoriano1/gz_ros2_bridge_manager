@@ -93,10 +93,21 @@ Plugins menu:
 gz sim <your_world.sdf>
 ```
 
-Alternatively, load via a config file:
+For a direct quick start with the plugin already loaded, the package now installs
+both a GUI config and a small demo world with a camera sensor:
 
 ```bash
-gz sim --gui-config install/gz_ros2_bridge_manager/share/gz_ros2_bridge_manager/config/ros2_bridge_manager.config <world.sdf>
+gz sim \
+  $(ros2 pkg prefix gz_ros2_bridge_manager)/share/gz_ros2_bridge_manager/worlds/bridge_manager_demo.sdf \
+  --gui-config $(ros2 pkg prefix gz_ros2_bridge_manager)/share/gz_ros2_bridge_manager/config/ros2_bridge_manager.config
+```
+
+If you want to use your own world instead, load the plugin via the packaged
+config file:
+
+```bash
+gz sim <your_world.sdf> \
+  --gui-config $(ros2 pkg prefix gz_ros2_bridge_manager)/share/gz_ros2_bridge_manager/config/ros2_bridge_manager.config
 ```
 
 The config file references the plugin as:
@@ -109,15 +120,18 @@ The config file references the plugin as:
 
 ## Usage
 
-1. **Refresh** — click Refresh (or enable Auto) to discover the active Gazebo world,
+1. **Quick start** (optional) — launch the packaged `bridge_manager_demo.sdf`
+   world if you want the bridge manager to find a sensor-bearing model
+   immediately after startup.
+2. **Refresh** — click Refresh (or enable Auto) to discover the active Gazebo world,
    its models, and all advertised topics.
-2. **Select a model** — pick a model from the drop-down. Topics likely associated
+3. **Select a model** — pick a model from the drop-down. Topics likely associated
    with that model appear pre-checked in the "Likely associated" list.
-3. **Tune the selection** — check or uncheck individual topics. Use "Check all" or
+4. **Tune the selection** — check or uncheck individual topics. Use "Check all" or
    "Uncheck all" as starting points. "Reset" restores heuristic defaults.
-4. **Include all models** (optional) — enable the checkbox to union the checked
+5. **Include all models** (optional) — enable the checkbox to union the checked
    topics from every model you have curated in the world into one command.
-5. **Copy** — click Copy to copy the command to the clipboard, then paste it into
+6. **Copy** — click Copy to copy the command to the clipboard, then paste it into
    a sourced ROS 2 terminal.
 
 ---
