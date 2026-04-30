@@ -11,6 +11,7 @@
 #include <gz/sim/components/GpuLidar.hh>
 #include <gz/sim/components/Imu.hh>
 #include <gz/sim/components/Lidar.hh>
+#include <gz/sim/components/Link.hh>
 #include <gz/sim/components/Magnetometer.hh>
 #include <gz/sim/components/Model.hh>
 #include <gz/sim/components/Name.hh>
@@ -115,44 +116,65 @@ std::vector<EcmSensorEntry> EcmSensorExtractor::extract(
       if (topicCmp)
         e.declaredTopic = topicCmp->Data();
 
-      // sensor → link
-      gz::sim::Entity linkEnt = parentCmp->Data();
-      e.linkEntity = static_cast<EntityId>(linkEnt);
-      const auto *linkNameCmp =
-          ecm.Component<gz::sim::components::Name>(linkEnt);
-      if (linkNameCmp) e.linkName = linkNameCmp->Data();
+      gz::sim::Entity parentEnt = parentCmp->Data();
+      gz::sim::Entity currentEnt = parentEnt;
 
-      // link → model
-      const auto *linkParentCmp =
-          ecm.Component<gz::sim::components::ParentEntity>(linkEnt);
-      if (linkParentCmp)
+      while (currentEnt != gz::sim::kNullEntity)
       {
-        gz::sim::Entity modelEnt = linkParentCmp->Data();
-        e.modelEntity = static_cast<EntityId>(modelEnt);
-        const auto *modelNameCmp =
-            ecm.Component<gz::sim::components::Name>(modelEnt);
-        if (modelNameCmp) e.modelName = modelNameCmp->Data();
-
-        // Detect nesting: is this model's parent also a model?
-        const auto *modelParentCmp =
-            ecm.Component<gz::sim::components::ParentEntity>(modelEnt);
-        if (modelParentCmp)
+        if (e.linkEntity == 0 &&
+            ecm.Component<gz::sim::components::Link>(currentEnt) != nullptr)
         {
-          gz::sim::Entity grandParent = modelParentCmp->Data();
-          e.nestedModel =
-              ecm.Component<gz::sim::components::Model>(grandParent) != nullptr;
+          e.linkEntity = static_cast<EntityId>(currentEnt);
+          const auto *linkNameCmp =
+              ecm.Component<gz::sim::components::Name>(currentEnt);
+          if (linkNameCmp)
+            e.linkName = linkNameCmp->Data();
         }
+
+        if (ecm.Component<gz::sim::components::Model>(currentEnt) != nullptr)
+        {
+          e.modelEntity = static_cast<EntityId>(currentEnt);
+          const auto *modelNameCmp =
+              ecm.Component<gz::sim::components::Name>(currentEnt);
+          if (modelNameCmp)
+            e.modelName = modelNameCmp->Data();
+
+          const auto *modelParentCmp =
+              ecm.Component<gz::sim::components::ParentEntity>(currentEnt);
+          if (modelParentCmp)
+          {
+            gz::sim::Entity grandParent = modelParentCmp->Data();
+            e.nestedModel =
+                ecm.Component<gz::sim::components::Model>(grandParent) != nullptr;
+          }
+          break;
+        }
+
+        const auto *ancestorParentCmp =
+            ecm.Component<gz::sim::components::ParentEntity>(currentEnt);
+        if (!ancestorParentCmp)
+          break;
+        currentEnt = ancestorParentCmp->Data();
       }
 
       // Pre-compute the Gazebo standard topic prefix for this sensor.
-      if (!worldName.empty() && !e.modelName.empty() &&
-          !e.linkName.empty()  && !e.sensorName.empty())
+      if (!worldName.empty() && !e.modelName.empty() && !e.sensorName.empty())
       {
-        e.fallbackGazeboTopicPrefix =
-            "/world/" + worldName +
-            "/model/" + e.modelName +
-            "/link/"  + e.linkName  +
-            "/sensor/" + e.sensorName;
+        if (!e.linkName.empty())
+        {
+          e.fallbackGazeboTopicPrefix =
+              "/world/" + worldName +
+              "/model/" + e.modelName +
+              "/link/"  + e.linkName  +
+              "/sensor/" + e.sensorName;
+        }
+        else
+        {
+          e.fallbackGazeboTopicPrefix =
+              "/world/" + worldName +
+              "/model/" + e.modelName +
+              "/sensor/" + e.sensorName;
+        }
       }
 
       result.push_back(std::move(e));

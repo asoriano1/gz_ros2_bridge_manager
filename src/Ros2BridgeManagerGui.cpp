@@ -106,8 +106,8 @@ QVariantMap sensorToVariantMap(const DiscoveredSensor &ds)
 }
 
 // Build BridgeTopicCandidate entries from ECM-matched sensor topics.
-// Strong matches (ECM exact/prefix/standard) are checked by default.
-// Weak matches (NameMatch, TypeCompatibleFallback) are unchecked by default.
+// The main workflow is ECM-only: declared SensorTopic matches are checked by
+// default, unresolved sensors stay visible via placeholder entries.
 std::vector<BridgeTopicCandidate> ecmToCandidates(
     const ModelSensorTree &tree,
     const BridgeTypeMapper & /*mapper*/,
@@ -118,7 +118,7 @@ std::vector<BridgeTopicCandidate> ecmToCandidates(
 
   for (const auto &ds : tree.sensors)
   {
-    // Strong match = auto-checked; weak match = unchecked by default.
+    // ECM-declared SensorTopic matches are auto-checked by default.
     const bool strongMatch =
         (ds.matchSource == MatchSource::EcmSensorTopicExact  ||
          ds.matchSource == MatchSource::EcmSensorTopicPrefix ||
@@ -347,6 +347,13 @@ void Ros2BridgeManagerGui::recomputeAndPublish()
   const ModelSensorTree allSensorsTree = EcmTopicMatcher::matchAll(
       world, ecmSensors, "", discoveredTopics_);
 
+  std::unordered_set<std::string> ecmDeclaredTopics;
+  for (const auto &sensor : allSensorsTree.sensors)
+  {
+    if (!sensor.sensor.declaredTopic.empty())
+      ecmDeclaredTopics.insert(sensor.sensor.declaredTopic);
+  }
+
   std::unordered_map<std::string, ModelSensorTree> treesByModel;
   for (const auto &modelName : discoveredModels_)
   {
@@ -389,8 +396,8 @@ void Ros2BridgeManagerGui::recomputeAndPublish()
     perModelTrees_[modelName] = std::move(tree);
   }
 
-  // 3. Additional bridgeable topics — all bridgeable topics not covered by any
-  //    ECM sensor match (strong or weak).
+  // 3. Additional bridgeable topics — all bridgeable topics not covered by
+  //    any ECM SensorTopic match.
   additionalCands_.clear();
   unsupportedCands_.clear();
 
@@ -398,6 +405,8 @@ void Ros2BridgeManagerGui::recomputeAndPublish()
 
   for (const auto &entry : discoveredTopics_)
   {
+    if (ecmDeclaredTopics.count(entry.topicName) > 0)
+      continue;
     if (globalCovered.count(entry.topicName) > 0)
       continue;
 

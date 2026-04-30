@@ -168,35 +168,6 @@ bool hasUnambiguousSensorTokens(const EcmSensorEntry &sensor,
   return sensorToken || (modelToken && linkToken);
 }
 
-std::vector<size_t> collectNameMatchIndices(
-    const EcmSensorEntry &sensor,
-    const std::vector<GzTopicEntry> &adv,
-    const std::unordered_set<std::string> &claimedTopics)
-{
-  std::vector<size_t> indices;
-  if (sensor.sensorType.empty())
-    return indices;
-
-  for (size_t i = 0; i < adv.size(); ++i)
-  {
-    const auto &t = adv[i];
-    if (claimedTopics.count(t.topicName) > 0)
-      continue;
-    if (containsDifferentModelPath(t.topicName, sensor.modelName))
-      continue;
-    if (!t.bridgeable || t.bridgeSpec.empty())
-      continue;
-    if (!ros2TypeCompatible(sensor, t))
-      continue;
-    if (!hasUnambiguousSensorTokens(sensor, t.topicName))
-      continue;
-
-    indices.push_back(i);
-  }
-
-  return indices;
-}
-
 std::vector<size_t> collectTypeCompatibleFallbackIndices(
     const EcmSensorEntry &sensor,
     const std::vector<GzTopicEntry> &adv,
@@ -398,8 +369,7 @@ DiscoveredSensor EcmTopicMatcher::matchSensor(
       return result;
     }
 
-    result.warning =
-        "SensorTopic was present in ECM but no advertised topic matched it yet.";
+    result.warning = "Sensor Topic found but type not advertised yet";
     return result;
   }
 
@@ -451,6 +421,11 @@ DiscoveredSensor EcmTopicMatcher::matchSensor(
 
 // ---------------------------------------------------------------------------
 // matchAll
+//
+// Main UI workflow: ECM SensorTopic is the source of truth. For each ECM
+// sensor we only attach bridgeable topics that match its declared SensorTopic.
+// Sensors without SensorTopic stay unresolved in the main list instead of
+// falling back to guessed name/type assignments.
 // ---------------------------------------------------------------------------
 
 ModelSensorTree EcmTopicMatcher::matchAll(
@@ -487,19 +462,12 @@ ModelSensorTree EcmTopicMatcher::matchAll(
       if (strongSource == MatchSource::Unresolved)
       {
         sensorResult.warning =
-            "SensorTopic was present in ECM but no advertised topic matched it yet.";
+            "Sensor Topic found but type not advertised yet";
       }
     }
-
-    if (s.declaredTopic.empty() &&
-        strongSource == MatchSource::Unresolved &&
-        !s.fallbackGazeboTopicPrefix.empty())
+    else
     {
-      strongSource = tryMatchPrefix(
-          s.fallbackGazeboTopicPrefix, s.sensorType, advertisedTopics,
-          strongTopics, strongSpecs);
-      if (strongSource != MatchSource::Unresolved)
-        strongSource = MatchSource::EcmStandardPrefix;
+      sensorResult.warning = "no Sensor Topic in ECM";
     }
 
     if (strongSource != MatchSource::Unresolved)
@@ -531,109 +499,10 @@ ModelSensorTree EcmTopicMatcher::matchAll(
     allSensors.push_back(std::move(sensorResult));
   }
 
-  struct WeakProposal
-  {
-    size_t sensorIndex{0};
-    MatchSource source{MatchSource::Unresolved};
-  };
-
-  std::vector<std::vector<WeakProposal>> proposals(advertisedTopics.size());
-  std::vector<bool> sensorHadWeakCandidates(allSensors.size(), false);
-
-  for (size_t i = 0; i < sensors.size(); ++i)
-  {
-    if (allSensors[i].resolved)
-      continue;
-
-    const auto nameMatches =
-        collectNameMatchIndices(sensors[i], advertisedTopics, claimedTopics);
-    if (!nameMatches.empty())
-    {
-      sensorHadWeakCandidates[i] = true;
-      for (const size_t topicIndex : nameMatches)
-        proposals[topicIndex].push_back({i, MatchSource::NameMatch});
-      continue;
-    }
-
-    const auto typeMatches = collectTypeCompatibleFallbackIndices(
-        sensors[i], advertisedTopics, claimedTopics);
-    if (!typeMatches.empty())
-    {
-      sensorHadWeakCandidates[i] = true;
-      for (const size_t topicIndex : typeMatches)
-        proposals[topicIndex].push_back(
-            {i, MatchSource::TypeCompatibleFallback});
-    }
-  }
-
-  for (size_t topicIndex = 0; topicIndex < advertisedTopics.size(); ++topicIndex)
-  {
-    const auto &topicProposals = proposals[topicIndex];
-    if (topicProposals.empty())
-      continue;
-    if (claimedTopics.count(advertisedTopics[topicIndex].topicName) > 0)
-      continue;
-
-    const MatchSource strongestSource =
-        std::any_of(topicProposals.begin(), topicProposals.end(),
-                    [](const WeakProposal &proposal)
-                    {
-                      return proposal.source == MatchSource::NameMatch;
-                    })
-            ? MatchSource::NameMatch
-            : MatchSource::TypeCompatibleFallback;
-
-    std::vector<WeakProposal> strongest;
-    for (const auto &proposal : topicProposals)
-    {
-      if (proposal.source == strongestSource)
-        strongest.push_back(proposal);
-    }
-
-    if (strongest.size() != 1u)
-      continue;
-
-    auto &sensorResult = allSensors[strongest.front().sensorIndex];
-    std::unordered_set<std::string> seenSpecs(sensorResult.matchedBridgeSpecs.begin(),
-                                              sensorResult.matchedBridgeSpecs.end());
-    appendTopicMatch(sensorResult, advertisedTopics[topicIndex], seenSpecs, &claimedTopics);
-    sensorResult.resolved = true;
-
-    if (sensorResult.matchSource == MatchSource::Unresolved ||
-        sensorResult.matchSource == MatchSource::TypeCompatibleFallback)
-    {
-      sensorResult.matchSource = strongestSource;
-    }
-  }
-
   for (size_t i = 0; i < allSensors.size(); ++i)
   {
     auto &sensorResult = allSensors[i];
-    if (sensorResult.resolved)
-    {
-      if (sensorResult.matchSource == MatchSource::NameMatch)
-      {
-        sensorResult.warning =
-            "Matched by name — verify this is the correct topic.";
-      }
-      else if (sensorResult.matchSource == MatchSource::TypeCompatibleFallback)
-      {
-        sensorResult.warning =
-            "Matched by type after model-safe filtering — verify this is the correct topic.";
-      }
-    }
-    else if (!sensorResult.sensor.declaredTopic.empty() &&
-             sensorResult.warning.empty())
-    {
-      sensorResult.warning =
-          "SensorTopic was present in ECM but no advertised topic matched it yet.";
-    }
-    else if (sensorHadWeakCandidates[i])
-    {
-      sensorResult.warning =
-          "Compatible topics were ambiguous or belonged to another model; leaving them unassigned.";
-    }
-    else if (sensorResult.warning.empty())
+    if (!sensorResult.resolved && sensorResult.warning.empty())
     {
       sensorResult.warning =
           "No matching topic found. The sensor may not be publishing yet.";

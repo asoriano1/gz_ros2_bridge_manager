@@ -367,6 +367,23 @@ Rectangle {
                     }
 
                     Label {
+                      text: sensorDel.sensorD.sensorName
+                      font.pixelSize: 9; font.bold: true; font.family: "monospace"
+                      color: "#212121"
+                      Layout.preferredWidth: 112
+                      elide: Text.ElideRight
+                      ToolTip.visible: sensorNameHover.containsMouse
+                      ToolTip.text: sensorDel.sensorD.sensorName
+                      ToolTip.delay: 300
+                      MouseArea {
+                        id: sensorNameHover
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        acceptedButtons: Qt.NoButton
+                      }
+                    }
+
+                    Label {
                       text: modelData.topic
                       font.pixelSize: 9; font.family: "monospace"; color: "#33691e"
                       Layout.fillWidth: true; elide: Text.ElideMiddle
@@ -401,12 +418,15 @@ Rectangle {
                   Label {
                     text: sensorDel.sensorD.sensorName
                     font.pixelSize: 9; font.bold: true; font.family: "monospace"; color: "#bf360c"
-                    Layout.preferredWidth: 90; elide: Text.ElideRight
+                    Layout.preferredWidth: 112; elide: Text.ElideRight
                   }
                   Label {
-                    text: "no advertised topic found"
+                    text: sensorDel.sensorD.warning.length > 0
+                          ? sensorDel.sensorD.warning
+                          : "No matching topic found."
                     font.pixelSize: 9; font.italic: true; color: "#757575"
                     Layout.fillWidth: true
+                    elide: Text.ElideRight
                   }
                 }
 
@@ -427,7 +447,7 @@ Rectangle {
                   }
                   Label {
                     visible: sensorDel.sensorD.declaredTopic.length > 0
-                    text: "declared: " + sensorDel.sensorD.declaredTopic
+                    text: "Sensor Topic: " + sensorDel.sensorD.declaredTopic
                     font.pixelSize: 8; font.family: "monospace"; color: "#424242"
                     Layout.fillWidth: true; elide: Text.ElideMiddle
                     ToolTip.visible: dclHov.containsMouse; ToolTip.text: sensorDel.sensorD.declaredTopic; ToolTip.delay: 300
@@ -436,7 +456,7 @@ Rectangle {
                   Label {
                     visible: sensorDel.sensorD.declaredTopic.length === 0 &&
                              sensorDel.sensorD.fallbackPrefix.length > 0
-                    text: "path: " + sensorDel.sensorD.fallbackPrefix
+                    text: "fallback: " + sensorDel.sensorD.fallbackPrefix
                     font.pixelSize: 8; font.family: "monospace"; color: "#616161"
                     Layout.fillWidth: true; elide: Text.ElideMiddle
                     ToolTip.visible: fpHov.containsMouse; ToolTip.text: sensorDel.sensorD.fallbackPrefix; ToolTip.delay: 300

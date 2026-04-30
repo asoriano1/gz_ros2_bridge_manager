@@ -590,33 +590,28 @@ TEST(EcmTopicMatcher, AmbiguousCompatibleTopicDoesNotAttachToAnyModel)
 }
 
 // ============================================================================
-// Test 25 — Model-scoped type fallback assigns only to the owning model
+// Test 25 — matchAll stays ECM-only when SensorTopic is missing
 // ============================================================================
-TEST(EcmTopicMatcher, ModelScopedTypeFallbackStaysWithOwningModel)
+TEST(EcmTopicMatcher, MatchAllDoesNotUseFallbackWithoutSensorTopic)
 {
   BridgeTypeMapper mapper;
-  const std::string topicA =
-      "/world/default/model/A/custom/scan";
+  const std::string fallback =
+      "/world/default/model/A/link/la/sensor/mystery_a";
 
   std::vector<GzTopicEntry> adv{
-    makeEntry(topicA, "gz.msgs.LaserScan", mapper),
+    makeEntry(fallback + "/scan", "gz.msgs.LaserScan", mapper),
   };
 
   std::vector<EcmSensorEntry> sensors{
-    makeSensor("A", "la", "mystery_a", "gpu_lidar"),
-    makeSensor("B", "lb", "mystery_b", "gpu_lidar"),
+    makeSensorWithFallback("A", "la", "mystery_a", "gpu_lidar", fallback),
   };
 
   auto tree = EcmTopicMatcher::matchAll("default", sensors, "", adv);
-  ASSERT_EQ(tree.sensors.size(), 2u);
-
-  EXPECT_TRUE(tree.sensors[0].resolved);
-  EXPECT_EQ(tree.sensors[0].matchSource, MatchSource::TypeCompatibleFallback);
-  ASSERT_EQ(tree.sensors[0].matchedTopicNames.size(), 1u);
-  EXPECT_EQ(tree.sensors[0].matchedTopicNames[0], topicA);
-
-  EXPECT_FALSE(tree.sensors[1].resolved);
-  EXPECT_TRUE(tree.sensors[1].matchedTopicNames.empty());
+  ASSERT_EQ(tree.sensors.size(), 1u);
+  EXPECT_FALSE(tree.sensors[0].resolved);
+  EXPECT_EQ(tree.sensors[0].matchSource, MatchSource::Unresolved);
+  EXPECT_TRUE(tree.sensors[0].matchedTopicNames.empty());
+  EXPECT_EQ(tree.sensors[0].warning, "no Sensor Topic in ECM");
 }
 
 // ============================================================================
@@ -656,7 +651,31 @@ TEST(EcmTopicMatcher, DeclaredTopicPreventsTypeCompatibleFallback)
   EXPECT_FALSE(ds.resolved);
   EXPECT_EQ(ds.matchSource, MatchSource::Unresolved);
   EXPECT_TRUE(ds.matchedTopicNames.empty());
-  EXPECT_NE(ds.warning.find("SensorTopic"), std::string::npos);
+  EXPECT_EQ(ds.warning, "Sensor Topic found but type not advertised yet");
+}
+
+// ============================================================================
+// Test 28 — matchAll keeps SensorTopic sensors unresolved until advertised
+// ============================================================================
+TEST(EcmTopicMatcher, MatchAllSensorTopicWithoutAdvertisedTypeShowsPendingWarning)
+{
+  BridgeTypeMapper mapper;
+
+  std::vector<GzTopicEntry> adv{
+    makeEntry("/some/unrelated/scan", "gz.msgs.LaserScan", mapper),
+  };
+
+  std::vector<EcmSensorEntry> sensors{
+    makeSensor("robot", "base", "front_laser", "gpu_lidar", "/robot/front_laser"),
+  };
+
+  auto tree = EcmTopicMatcher::matchAll("default", sensors, "", adv);
+  ASSERT_EQ(tree.sensors.size(), 1u);
+  EXPECT_FALSE(tree.sensors[0].resolved);
+  EXPECT_EQ(tree.sensors[0].matchSource, MatchSource::Unresolved);
+  EXPECT_TRUE(tree.sensors[0].matchedTopicNames.empty());
+  EXPECT_EQ(tree.sensors[0].warning,
+            "Sensor Topic found but type not advertised yet");
 }
 
 int main(int argc, char **argv)
