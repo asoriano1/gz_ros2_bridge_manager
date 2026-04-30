@@ -15,6 +15,7 @@
 #include <gz/sim/gui/GuiSystem.hh>
 
 #include "gz_ros2_bridge_manager/BridgeTopicCandidate.hh"
+#include "gz_ros2_bridge_manager/BridgeProcessManager.hh"
 #include "gz_ros2_bridge_manager/BridgeTypeMapper.hh"
 #include "gz_ros2_bridge_manager/EcmSensorDiscovery.hh"
 #include "gz_ros2_bridge_manager/GazeboTopicDiscovery.hh"
@@ -53,6 +54,12 @@ class Ros2BridgeManagerGui : public gz::sim::GuiSystem
   Q_PROPERTY(QString      bridgeCommand             READ bridgeCommand             NOTIFY bridgeCommandChanged)
   Q_PROPERTY(QString      bridgeCommandDisplay      READ bridgeCommandDisplay      NOTIFY bridgeCommandChanged)
   Q_PROPERTY(int          selectedBridgeTopicCount  READ selectedBridgeTopicCount  NOTIFY bridgeCommandChanged)
+  Q_PROPERTY(bool         bridgeRunning             READ bridgeRunning             NOTIFY bridgeRunningChanged)
+  Q_PROPERTY(bool         bridgeBusy                READ bridgeBusy                NOTIFY bridgeBusyChanged)
+  Q_PROPERTY(QString      bridgeStatusText          READ bridgeStatusText          NOTIFY bridgeStatusTextChanged)
+  Q_PROPERTY(QString      bridgeOutput              READ bridgeOutput              NOTIFY bridgeOutputChanged)
+  Q_PROPERTY(bool         bridgeRestartRequired     READ bridgeRestartRequired     NOTIFY bridgeRestartRequiredChanged)
+  Q_PROPERTY(QString      runningBridgeCommand      READ runningBridgeCommand      NOTIFY runningBridgeCommandChanged)
 
 public:
   Ros2BridgeManagerGui();
@@ -77,6 +84,12 @@ public:
   QString      bridgeCommand()      const { return bridgeCommand_; }
   QString      bridgeCommandDisplay() const { return bridgeCommandDisplay_; }
   int          selectedBridgeTopicCount() const { return selectedBridgeTopicCount_; }
+  bool         bridgeRunning()      const { return bridgeProcess_.bridgeRunning(); }
+  bool         bridgeBusy()         const { return bridgeProcess_.bridgeBusy(); }
+  QString      bridgeStatusText()   const { return bridgeProcess_.bridgeStatusText(); }
+  QString      bridgeOutput()       const { return bridgeProcess_.bridgeOutput(); }
+  bool         bridgeRestartRequired() const { return bridgeProcess_.bridgeRestartRequired(); }
+  QString      runningBridgeCommand() const { return bridgeProcess_.runningBridgeCommand(); }
 
   // ---- Invokables ----
   Q_INVOKABLE void refresh();
@@ -85,6 +98,10 @@ public:
   Q_INVOKABLE void resetModelSelection(const QString &modelName);
   Q_INVOKABLE void copyBridgeCommand();
   Q_INVOKABLE void setAutoRefresh(bool enabled);
+  Q_INVOKABLE void runBridge();
+  Q_INVOKABLE void stopBridge();
+  Q_INVOKABLE void restartBridge();
+  Q_INVOKABLE void clearBridgeOutput();
 
 signals:
   void worldNameChanged();
@@ -94,6 +111,12 @@ signals:
   void lastRefreshTimeChanged();
   void modelsChanged();
   void bridgeCommandChanged();
+  void bridgeRunningChanged();
+  void bridgeBusyChanged();
+  void bridgeStatusTextChanged();
+  void bridgeOutputChanged();
+  void bridgeRestartRequiredChanged();
+  void runningBridgeCommandChanged();
 
 private slots:
   void onAutoRefreshTick();
@@ -148,6 +171,7 @@ private:
 
   QTimer       autoRefreshTimer_;
   BridgeTypeMapper mapper_;
+  BridgeProcessManager bridgeProcess_;
 };
 
 }  // namespace gz_ros2_bridge_manager

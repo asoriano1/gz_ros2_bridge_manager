@@ -194,6 +194,19 @@ Ros2BridgeManagerGui::Ros2BridgeManagerGui()
   autoRefreshTimer_.setInterval(kAutoRefreshIntervalMs);
   connect(&autoRefreshTimer_, &QTimer::timeout,
           this, &Ros2BridgeManagerGui::onAutoRefreshTick);
+
+  connect(&bridgeProcess_, &BridgeProcessManager::bridgeRunningChanged,
+          this, &Ros2BridgeManagerGui::bridgeRunningChanged);
+  connect(&bridgeProcess_, &BridgeProcessManager::bridgeBusyChanged,
+          this, &Ros2BridgeManagerGui::bridgeBusyChanged);
+  connect(&bridgeProcess_, &BridgeProcessManager::bridgeStatusTextChanged,
+          this, &Ros2BridgeManagerGui::bridgeStatusTextChanged);
+  connect(&bridgeProcess_, &BridgeProcessManager::bridgeOutputChanged,
+          this, &Ros2BridgeManagerGui::bridgeOutputChanged);
+  connect(&bridgeProcess_, &BridgeProcessManager::bridgeRestartRequiredChanged,
+          this, &Ros2BridgeManagerGui::bridgeRestartRequiredChanged);
+  connect(&bridgeProcess_, &BridgeProcessManager::runningBridgeCommandChanged,
+          this, &Ros2BridgeManagerGui::runningBridgeCommandChanged);
 }
 
 void Ros2BridgeManagerGui::LoadConfig(const tinyxml2::XMLElement * /*_pluginElem*/)
@@ -439,8 +452,15 @@ void Ros2BridgeManagerGui::rebuildBridgeCommand()
   for (const auto &c : additionalCands_)
     allCands.push_back(c);
 
+  const auto selectedSpecs = BridgeCommandBuilder::selectedSpecs(allCands);
   bridgeCommand_        = QString::fromStdString(BridgeCommandBuilder::buildCommand(allCands));
   bridgeCommandDisplay_ = QString::fromStdString(BridgeCommandBuilder::buildCommandWrapped(allCands));
+
+  QStringList desiredSpecs;
+  desiredSpecs.reserve(static_cast<int>(selectedSpecs.size()));
+  for (const auto &spec : selectedSpecs)
+    desiredSpecs.push_back(QString::fromStdString(spec));
+  bridgeProcess_.setDesiredSpecs(desiredSpecs);
 
   int count = 0;
   for (const auto &c : allCands)
@@ -599,6 +619,26 @@ void Ros2BridgeManagerGui::copyBridgeCommand()
 {
   if (auto *clip = QGuiApplication::clipboard())
     clip->setText(bridgeCommand_);
+}
+
+void Ros2BridgeManagerGui::runBridge()
+{
+  bridgeProcess_.runBridge();
+}
+
+void Ros2BridgeManagerGui::stopBridge()
+{
+  bridgeProcess_.stopBridge();
+}
+
+void Ros2BridgeManagerGui::restartBridge()
+{
+  bridgeProcess_.restartBridge();
+}
+
+void Ros2BridgeManagerGui::clearBridgeOutput()
+{
+  bridgeProcess_.clearBridgeOutput();
 }
 
 }  // namespace gz_ros2_bridge_manager

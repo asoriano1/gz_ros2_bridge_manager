@@ -34,6 +34,7 @@ find_package(Qt5 REQUIRED COMPONENTS Core Concurrent Gui Quick QuickControls2)
 set(PLUGIN_NAME Ros2BridgeManagerGui)
 
 set(PLUGIN_SOURCES
+  src/BridgeProcessManager.cpp
   src/Ros2BridgeManagerGui.cpp
   src/BridgeTypeMapper.cpp
   src/WorldDiscovery.cpp
@@ -48,6 +49,7 @@ set(PLUGIN_SOURCES
 )
 
 set(PLUGIN_MOC_HEADERS
+  include/gz_ros2_bridge_manager/BridgeProcessManager.hh
   include/gz_ros2_bridge_manager/Ros2BridgeManagerGui.hh
 )
 
@@ -150,6 +152,18 @@ if(BUILD_TESTING)
   )
   target_include_directories(test_bridge_session
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
+
+  ament_add_gtest(test_bridge_process_manager
+    test/test_bridge_process_manager.cpp
+    src/BridgeProcessManager.cpp
+    include/gz_ros2_bridge_manager/BridgeProcessManager.hh
+  )
+  target_include_directories(test_bridge_process_manager
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
+  target_link_libraries(test_bridge_process_manager
+    Qt5::Core
   )
 
   # Pure matching logic — only EcmSensorDiscovery + BridgeTypeMapper needed.

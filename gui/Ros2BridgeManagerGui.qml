@@ -67,6 +67,15 @@ Rectangle {
     return "#757575"
   }
 
+  function bridgeStatusColor(status) {
+    if (status === "Running") return "#1b5e20"
+    if (status === "Restart required") return "#e65100"
+    if (status === "Starting" || status === "Stopping") return "#1565c0"
+    if (status === "Failed" || status === "Crashed") return "#b71c1c"
+    if (status === "Exited") return "#424242"
+    return "#757575"
+  }
+
   // ---- TopicRow: used by Additional and Unsupported sections only ---------
   component TopicRow: Rectangle {
     id: rowRoot
@@ -442,6 +451,16 @@ Rectangle {
         border.width: 1; radius: 4
 
         property bool expanded: false
+        property bool outputExpanded: false
+
+        Connections {
+          target: bridgeManager
+          function onBridgeStatusTextChanged() {
+            if (bridgeManager.bridgeStatusText === "Failed" ||
+                bridgeManager.bridgeStatusText === "Crashed")
+              cmdCard.outputExpanded = true
+          }
+        }
 
         ColumnLayout {
           id: cmdCol
@@ -491,6 +510,72 @@ Rectangle {
           }
 
           Rectangle {
+            Layout.fillWidth: true
+            implicitHeight: bridgeCtrlRow.implicitHeight + 12
+            color: "#ffffff"
+            radius: 3
+            border.color: "#e0e0e0"
+            border.width: 1
+
+            RowLayout {
+              id: bridgeCtrlRow
+              anchors {
+                left: parent.left
+                right: parent.right
+                verticalCenter: parent.verticalCenter
+                leftMargin: 8
+                rightMargin: 8
+              }
+              spacing: 6
+
+              Label {
+                text: "Status: " + bridgeManager.bridgeStatusText
+                font.pixelSize: 10
+                font.bold: true
+                color: root.bridgeStatusColor(bridgeManager.bridgeStatusText)
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+              }
+
+              Button {
+                text: "Run"
+                font.pixelSize: 10
+                implicitHeight: 24
+                enabled: bridgeManager.selectedBridgeTopicCount > 0 &&
+                         !bridgeManager.bridgeRunning &&
+                         !bridgeManager.bridgeBusy
+                onClicked: bridgeManager.runBridge()
+              }
+
+              Button {
+                text: "Stop"
+                font.pixelSize: 10
+                implicitHeight: 24
+                enabled: bridgeManager.bridgeRunning || bridgeManager.bridgeBusy
+                onClicked: bridgeManager.stopBridge()
+              }
+
+              Button {
+                text: "Restart"
+                font.pixelSize: 10
+                implicitHeight: 24
+                visible: bridgeManager.bridgeRunning &&
+                         bridgeManager.bridgeRestartRequired
+                enabled: visible && !bridgeManager.bridgeBusy
+                onClicked: bridgeManager.restartBridge()
+              }
+
+              Button {
+                text: "Clear output"
+                font.pixelSize: 10
+                implicitHeight: 24
+                enabled: bridgeManager.bridgeOutput.length > 0
+                onClicked: bridgeManager.clearBridgeOutput()
+              }
+            }
+          }
+
+          Rectangle {
             visible: cmdCard.expanded
             Layout.fillWidth: true
             implicitHeight: bridgeManager.bridgeCommand.length > 0
@@ -520,6 +605,90 @@ Rectangle {
               text: "No topics checked. Expand a model card above and check topics."
               font.pixelSize: 10; font.italic: true; color: "#9e9e9e"
               wrapMode: Text.Wrap; horizontalAlignment: Text.AlignHCenter
+            }
+          }
+
+          Rectangle {
+            Layout.fillWidth: true
+            implicitHeight: outCol.implicitHeight + 10
+            color: "#fafafa"
+            radius: 3
+            border.color: "#e0e0e0"
+            border.width: 1
+
+            ColumnLayout {
+              id: outCol
+              anchors {
+                top: parent.top
+                left: parent.left
+                right: parent.right
+                topMargin: 5
+                leftMargin: 6
+                rightMargin: 6
+              }
+              spacing: 4
+
+              Item {
+                Layout.fillWidth: true
+                implicitHeight: outHeader.implicitHeight
+
+                Label {
+                  id: outHeader
+                  anchors {
+                    left: parent.left
+                    right: parent.right
+                  }
+                  text: (cmdCard.outputExpanded ? "▼" : "▶") + "  Bridge output"
+                  font.bold: true
+                  font.pixelSize: 11
+                  color: "#424242"
+                }
+
+                MouseArea {
+                  anchors.fill: parent
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: cmdCard.outputExpanded = !cmdCard.outputExpanded
+                }
+              }
+
+              Rectangle {
+                visible: cmdCard.outputExpanded
+                Layout.fillWidth: true
+                implicitHeight: bridgeManager.bridgeOutput.length > 0
+                                  ? Math.min(outLabel.implicitHeight + 10, 180) : 36
+                color: "#ffffff"
+                radius: 3
+                border.color: "#e0e0e0"
+                border.width: 1
+                clip: true
+
+                Flickable {
+                  anchors.fill: parent
+                  anchors.margins: 5
+                  contentHeight: outLabel.implicitHeight
+                  clip: true
+                  visible: bridgeManager.bridgeOutput.length > 0
+
+                  Label {
+                    id: outLabel
+                    width: parent.width
+                    text: bridgeManager.bridgeOutput
+                    font.pixelSize: 9
+                    font.family: "monospace"
+                    color: "#424242"
+                    wrapMode: Text.Wrap
+                  }
+                }
+
+                Label {
+                  anchors.centerIn: parent
+                  visible: bridgeManager.bridgeOutput.length === 0
+                  text: "No bridge output yet."
+                  font.pixelSize: 10
+                  font.italic: true
+                  color: "#9e9e9e"
+                }
+              }
             }
           }
         }
