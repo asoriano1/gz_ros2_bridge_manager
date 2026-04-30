@@ -565,14 +565,6 @@ Rectangle {
                 enabled: visible && !bridgeManager.bridgeBusy
                 onClicked: bridgeManager.restartBridge()
               }
-
-              Button {
-                text: "Clear output"
-                font.pixelSize: 10
-                implicitHeight: 24
-                enabled: bridgeManager.bridgeOutput.length > 0
-                onClicked: bridgeManager.clearBridgeOutput()
-              }
             }
           }
 
@@ -631,24 +623,47 @@ Rectangle {
 
               Item {
                 Layout.fillWidth: true
-                implicitHeight: outHeader.implicitHeight
+                implicitHeight: outHeaderRow.implicitHeight
 
-                Label {
-                  id: outHeader
+                RowLayout {
+                  id: outHeaderRow
                   anchors {
                     left: parent.left
                     right: parent.right
                   }
-                  text: (cmdCard.outputExpanded ? "▼" : "▶") + "  Bridge output"
-                  font.bold: true
-                  font.pixelSize: 11
-                  color: "#424242"
-                }
+                  spacing: 6
 
-                MouseArea {
-                  anchors.fill: parent
-                  cursorShape: Qt.PointingHandCursor
-                  onClicked: cmdCard.outputExpanded = !cmdCard.outputExpanded
+                  Item {
+                    Layout.fillWidth: true
+                    implicitHeight: outHeader.implicitHeight
+
+                    Label {
+                      id: outHeader
+                      anchors {
+                        left: parent.left
+                        right: parent.right
+                      }
+                      text: (cmdCard.outputExpanded ? "▼" : "▶") + "  Bridge output"
+                      font.bold: true
+                      font.pixelSize: 11
+                      color: "#424242"
+                    }
+
+                    MouseArea {
+                      anchors.fill: parent
+                      cursorShape: Qt.PointingHandCursor
+                      onClicked: cmdCard.outputExpanded = !cmdCard.outputExpanded
+                    }
+                  }
+
+                  Button {
+                    text: "Clear output"
+                    font.pixelSize: 10
+                    implicitWidth: 88
+                    implicitHeight: 24
+                    enabled: bridgeManager.bridgeOutput.length > 0
+                    onClicked: bridgeManager.clearBridgeOutput()
+                  }
                 }
               }
 
