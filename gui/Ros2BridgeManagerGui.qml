@@ -72,6 +72,7 @@ Rectangle {
     if (status === "Restart required") return "#e65100"
     if (status === "Starting" || status === "Stopping") return "#1565c0"
     if (status === "Failed" || status === "Crashed") return "#b71c1c"
+    if (status === "Stopped") return "#2e7d32"
     if (status === "Exited") return "#424242"
     return "#757575"
   }

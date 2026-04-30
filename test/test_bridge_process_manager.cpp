@@ -4,20 +4,44 @@
 
 using namespace gz_ros2_bridge_manager;
 
-TEST(BridgeProcessManager, BuildsRos2ParameterBridgeArguments)
+TEST(BridgeProcessManager, BuildsDirectParameterBridgeLaunchCommand)
 {
   const QStringList specs{
       QStringLiteral("/cam@sensor_msgs/msg/Image@gz.msgs.Image"),
       QStringLiteral("/imu@sensor_msgs/msg/Imu@gz.msgs.IMU"),
   };
 
-  const QStringList args = BridgeProcessManager::buildArguments(specs);
-  ASSERT_EQ(args.size(), 5);
-  EXPECT_EQ(args[0], QStringLiteral("run"));
-  EXPECT_EQ(args[1], QStringLiteral("ros_gz_bridge"));
-  EXPECT_EQ(args[2], QStringLiteral("parameter_bridge"));
-  EXPECT_EQ(args[3], specs[0]);
-  EXPECT_EQ(args[4], specs[1]);
+  const auto launch = BridgeProcessManager::buildLaunchCommand(
+      QStringLiteral("/opt/ros/jazzy/lib/ros_gz_bridge/parameter_bridge"),
+      specs);
+
+  EXPECT_TRUE(launch.direct);
+  EXPECT_EQ(launch.program,
+            QStringLiteral("/opt/ros/jazzy/lib/ros_gz_bridge/parameter_bridge"));
+  EXPECT_EQ(launch.arguments, specs);
+  EXPECT_EQ(
+      launch.displayCommand,
+      QStringLiteral("/opt/ros/jazzy/lib/ros_gz_bridge/parameter_bridge "
+                     "/cam@sensor_msgs/msg/Image@gz.msgs.Image "
+                     "/imu@sensor_msgs/msg/Imu@gz.msgs.IMU"));
+}
+
+TEST(BridgeProcessManager, FallsBackToRos2RunWhenExecutableResolutionFails)
+{
+  const QStringList specs{
+      QStringLiteral("/cam@sensor_msgs/msg/Image@gz.msgs.Image"),
+  };
+
+  const auto launch = BridgeProcessManager::buildLaunchCommand(QString{}, specs);
+
+  EXPECT_FALSE(launch.direct);
+  EXPECT_EQ(launch.program, QStringLiteral("ros2"));
+  ASSERT_EQ(launch.arguments.size(), 4);
+  EXPECT_EQ(launch.arguments[0], QStringLiteral("run"));
+  EXPECT_EQ(launch.arguments[1], QStringLiteral("ros_gz_bridge"));
+  EXPECT_EQ(launch.arguments[2], QStringLiteral("parameter_bridge"));
+  EXPECT_EQ(launch.arguments[3], specs[0]);
+  EXPECT_EQ(launch.displayCommand, BridgeProcessManager::buildCommand(specs));
 }
 
 TEST(BridgeProcessManager, EmptySpecsAreRefused)
@@ -70,6 +94,9 @@ TEST(BridgeProcessManager, StatusToStringCoversPublicStates)
   EXPECT_EQ(BridgeProcessManager::statusToString(
                 BridgeProcessManager::Status::Crashed),
             QStringLiteral("Crashed"));
+  EXPECT_EQ(BridgeProcessManager::statusToString(
+                BridgeProcessManager::Status::Stopped),
+            QStringLiteral("Stopped"));
 }
 
 TEST(BridgeProcessManager, OutputBufferTruncatesOldestText)
@@ -80,6 +107,29 @@ TEST(BridgeProcessManager, OutputBufferTruncatesOldestText)
       8);
 
   EXPECT_EQ(bounded, QStringLiteral("efghijkl"));
+}
+
+TEST(BridgeProcessManager, UserRequestedSignalExitMapsToStopped)
+{
+  EXPECT_EQ(
+      BridgeProcessManager::finalStatusForExit(
+          true, 130, QProcess::CrashExit),
+      BridgeProcessManager::Status::Stopped);
+}
+
+TEST(BridgeProcessManager, UnexpectedCrashMapsToCrashed)
+{
+  EXPECT_EQ(
+      BridgeProcessManager::finalStatusForExit(
+          false, 1, QProcess::CrashExit),
+      BridgeProcessManager::Status::Crashed);
+}
+
+TEST(BridgeProcessManager, StopRequestSetsUserStopRequestedFlag)
+{
+  BridgeProcessManager manager;
+  manager.stopBridge();
+  EXPECT_TRUE(manager.userStopRequested());
 }
 
 int main(int argc, char **argv)
