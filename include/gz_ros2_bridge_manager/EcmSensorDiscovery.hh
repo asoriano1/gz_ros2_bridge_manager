@@ -90,6 +90,12 @@ public:
   static std::unordered_set<std::string> claimedTopicNames(
       const ModelSensorTree &tree);
 
+  /// Production helper: all bridgeable discovered topics minus the claimed ECM
+  /// topic set, using the same normalization path as the UI.
+  static std::vector<GzTopicEntry> bridgeableTopicsExcludingClaims(
+      const std::vector<GzTopicEntry> &discoveredTopics,
+      const ModelSensorTree &tree);
+
   /// Match one sensor against the full advertised-topic list.
   /// Matching priority:
   ///   1. declaredTopic exact match         → EcmSensorTopicExact

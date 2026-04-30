@@ -180,7 +180,7 @@ std::vector<EcmSensorEntry> EcmSensorExtractor::extract(
       if (e.declaredTopic.empty() &&
           (e.sensorType == "lidar" || e.sensorType == "gpu_lidar"))
       {
-        gzdbg << "[BridgeManager] ECM lidar sensor missing SensorTopic: "
+        gzdbg << "[gz_ros2_bridge_manager][debug] ECM lidar sensor missing SensorTopic: "
               << "sensor=" << e.sensorName
               << ", type=" << e.sensorType
               << ", model=" << e.modelName

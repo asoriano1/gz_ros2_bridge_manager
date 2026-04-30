@@ -6,6 +6,10 @@
 #include <QGuiApplication>
 #include <QVariantMap>
 
+#include <algorithm>
+#include <cctype>
+#include <sstream>
+
 #include <gz/gui/Application.hh>
 #include <gz/plugin/Register.hh>
 #include <gz/common/Console.hh>
@@ -32,6 +36,85 @@ namespace
 
 constexpr int  kAutoRefreshIntervalMs = 2500;
 constexpr const char *kAdditionalMarker = "__additional__";
+constexpr bool kDebugTopicAssignment = true;
+
+void debugLog(const std::string &message)
+{
+  if (!kDebugTopicAssignment)
+    return;
+  gzdbg << "[gz_ros2_bridge_manager][debug] " << message << '\n';
+}
+
+std::string gzTypeFromBridgeSpec(const std::string &spec)
+{
+  const auto at1 = spec.find('@');
+  if (at1 == std::string::npos)
+    return {};
+  const auto at2 = spec.find('@', at1 + 1);
+  if (at2 == std::string::npos || at2 + 1 >= spec.size())
+    return {};
+  return spec.substr(at2 + 1);
+}
+
+std::string ros2TypeFromBridgeSpec(const std::string &spec)
+{
+  const auto at1 = spec.find('@');
+  if (at1 == std::string::npos)
+    return {};
+  const auto at2 = spec.find('@', at1 + 1);
+  if (at2 == std::string::npos || at2 <= at1 + 1)
+    return {};
+  return spec.substr(at1 + 1, at2 - at1 - 1);
+}
+
+std::string normalizeBridgeSpecTopic(const std::string &spec)
+{
+  const auto at1 = spec.find('@');
+  if (at1 == std::string::npos)
+    return spec;
+  return EcmTopicMatcher::normalizeTopic(spec.substr(0, at1)) + spec.substr(at1);
+}
+
+std::string matchedTopicSourceLabel(const DiscoveredSensor &ds,
+                                    const std::string &topic,
+                                    const std::string &gzType)
+{
+  const std::string normalizedTopic = EcmTopicMatcher::normalizeTopic(topic);
+  const std::string normalizedDeclared =
+      EcmTopicMatcher::normalizeTopic(ds.sensor.declaredTopic);
+
+  if (!normalizedDeclared.empty() && normalizedTopic == normalizedDeclared)
+  {
+    if (ds.typeSource == "advertised")
+      return "TopicInfo";
+    if (ds.typeSource == "type inferred")
+      return "inferred from sensorType";
+    return "ECM SensorTopic";
+  }
+
+  if (gzType == "gz.msgs.CameraInfo")
+    return "derived camera_info";
+
+  if (ds.matchSource == MatchSource::EcmSensorTopicExact ||
+      ds.matchSource == MatchSource::EcmSensorTopicPrefix)
+  {
+    return "ECM SensorTopic";
+  }
+
+  if (ds.matchSource == MatchSource::EcmStandardPrefix)
+    return "other";
+
+  return "other";
+}
+
+bool containsCameraOrInfo(const std::string &value)
+{
+  std::string lowered = value;
+  std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                 [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+  return lowered.find("camera") != std::string::npos ||
+         lowered.find("info") != std::string::npos;
+}
 
 // ---- QML helpers --------------------------------------------------------
 
@@ -354,6 +437,30 @@ void Ros2BridgeManagerGui::recomputeAndPublish()
   const std::unordered_set<std::string> claimedEcmTopics =
       EcmTopicMatcher::claimedTopicNames(allSensorsTree);
 
+  if (kDebugTopicAssignment)
+  {
+    debugLog("claimed topics:");
+    for (const auto &topic : claimedEcmTopics)
+      debugLog("  claimed: " + topic);
+
+    debugLog("discovered camera/info topics:");
+    for (const auto &entry : discoveredTopics_)
+    {
+      if (!containsCameraOrInfo(entry.topicName) &&
+          !containsCameraOrInfo(entry.gzMsgType))
+      {
+        continue;
+      }
+
+      std::ostringstream oss;
+      oss << "  discovered: topic=" << EcmTopicMatcher::normalizeTopic(entry.topicName)
+          << ", gzType=" << (entry.gzMsgType.empty() ? "<none>" : entry.gzMsgType)
+          << ", rosType=" << (entry.ros2MsgType.empty() ? "<none>" : entry.ros2MsgType)
+          << ", bridgeable=" << (entry.bridgeable ? "true" : "false");
+      debugLog(oss.str());
+    }
+  }
+
   std::unordered_map<std::string, ModelSensorTree> treesByModel;
   for (const auto &modelName : discoveredModels_)
   {
@@ -400,28 +507,87 @@ void Ros2BridgeManagerGui::recomputeAndPublish()
 
   const std::string addKey = world + "::" + kAdditionalMarker;
 
+  const auto additionalBridgeableTopics =
+      EcmTopicMatcher::bridgeableTopicsExcludingClaims(discoveredTopics_, allSensorsTree);
+
+  if (kDebugTopicAssignment)
+  {
+    for (const auto &modelEntry : treesByModel)
+    {
+      const auto &tree = modelEntry.second;
+      for (const auto &sensor : tree.sensors)
+      {
+        std::ostringstream header;
+        header << "model=" << sensor.sensor.modelName
+               << "(" << sensor.sensor.modelEntity << ")"
+               << ", link=" << (sensor.sensor.linkName.empty() ? "<none>" : sensor.sensor.linkName)
+               << "(" << sensor.sensor.linkEntity << ")"
+               << ", sensor=" << sensor.sensor.sensorName
+               << "(" << sensor.sensor.sensorEntity << ")"
+               << ", sensorType=" << sensor.sensor.sensorType
+               << ", SensorTopic="
+               << (sensor.sensor.declaredTopic.empty() ? "<none>" : sensor.sensor.declaredTopic)
+               << ", fallback="
+               << (sensor.sensor.fallbackGazeboTopicPrefix.empty()
+                       ? "<none>"
+                       : sensor.sensor.fallbackGazeboTopicPrefix);
+        debugLog(header.str());
+
+        for (size_t i = 0; i < sensor.matchedTopicNames.size(); ++i)
+        {
+          const std::string topic =
+              EcmTopicMatcher::normalizeTopic(sensor.matchedTopicNames[i]);
+          const std::string spec =
+              i < sensor.matchedBridgeSpecs.size() ? sensor.matchedBridgeSpecs[i] : std::string{};
+          const std::string gzType = gzTypeFromBridgeSpec(spec);
+          const std::string rosType = ros2TypeFromBridgeSpec(spec);
+          const std::string source = matchedTopicSourceLabel(sensor, topic, gzType);
+
+          std::ostringstream topicLog;
+          topicLog << "  matched: topic=" << topic
+                   << ", gzType=" << (gzType.empty() ? "<none>" : gzType)
+                   << ", rosType=" << (rosType.empty() ? "<none>" : rosType)
+                   << ", source=" << source;
+          debugLog(topicLog.str());
+        }
+      }
+    }
+
+    debugLog("additional topics before dedup:");
+    for (const auto &entry : discoveredTopics_)
+    {
+      if (!entry.bridgeable || entry.bridgeSpec.empty())
+        continue;
+      debugLog("  additional-pre: " + EcmTopicMatcher::normalizeTopic(entry.topicName));
+    }
+
+    debugLog("additional topics after dedup:");
+    for (const auto &entry : additionalBridgeableTopics)
+      debugLog("  additional-post: " + EcmTopicMatcher::normalizeTopic(entry.topicName));
+  }
+
+  for (const auto &entry : additionalBridgeableTopics)
+  {
+    BridgeTopicCandidate c;
+    c.gzTopic    = EcmTopicMatcher::normalizeTopic(entry.topicName);
+    c.gzType     = entry.gzMsgType;
+    c.ros2Type   = entry.ros2MsgType;
+    c.bridgeSpec = normalizeBridgeSpecTopic(entry.bridgeSpec);
+    c.bridgeable = true;
+    c.checked    = false;  // additional topics unchecked by default
+    c.category   = AssociationCategory::CompatibleButUnassigned;
+    c.isGeneric  = TopicAssociationHeuristic::isGenericTopic(entry.topicName);
+    additionalCands_.push_back(std::move(c));
+  }
+
   for (const auto &entry : discoveredTopics_)
   {
     if (claimedEcmTopics.count(EcmTopicMatcher::normalizeTopic(entry.topicName)) > 0)
       continue;
-
-    if (entry.bridgeable && !entry.bridgeSpec.empty())
+    if (!entry.bridgeable)
     {
       BridgeTopicCandidate c;
-      c.gzTopic    = entry.topicName;
-      c.gzType     = entry.gzMsgType;
-      c.ros2Type   = entry.ros2MsgType;
-      c.bridgeSpec = entry.bridgeSpec;
-      c.bridgeable = true;
-      c.checked    = false;  // additional topics unchecked by default
-      c.category   = AssociationCategory::CompatibleButUnassigned;
-      c.isGeneric  = TopicAssociationHeuristic::isGenericTopic(entry.topicName);
-      additionalCands_.push_back(std::move(c));
-    }
-    else if (!entry.bridgeable)
-    {
-      BridgeTopicCandidate c;
-      c.gzTopic    = entry.topicName;
+      c.gzTopic    = EcmTopicMatcher::normalizeTopic(entry.topicName);
       c.gzType     = entry.gzMsgType;
       c.bridgeable = false;
       c.checked    = false;

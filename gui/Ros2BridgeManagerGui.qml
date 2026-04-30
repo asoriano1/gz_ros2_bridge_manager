@@ -367,23 +367,6 @@ Rectangle {
                     }
 
                     Label {
-                      text: sensorDel.sensorD.sensorName
-                      font.pixelSize: 9; font.bold: true; font.family: "monospace"
-                      color: "#212121"
-                      Layout.preferredWidth: 112
-                      elide: Text.ElideRight
-                      ToolTip.visible: sensorNameHover.containsMouse
-                      ToolTip.text: sensorDel.sensorD.sensorName
-                      ToolTip.delay: 300
-                      MouseArea {
-                        id: sensorNameHover
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        acceptedButtons: Qt.NoButton
-                      }
-                    }
-
-                    Label {
                       text: modelData.topic
                       font.pixelSize: 9; font.family: "monospace"; color: "#33691e"
                       Layout.fillWidth: true; elide: Text.ElideMiddle

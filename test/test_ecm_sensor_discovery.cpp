@@ -32,16 +32,10 @@ std::vector<std::string> additionalTopicsAfterClaims(
     const std::vector<GzTopicEntry> &advertisedTopics,
     const ModelSensorTree &tree)
 {
-  const auto claimed = EcmTopicMatcher::claimedTopicNames(tree);
   std::vector<std::string> additionalTopics;
-  for (const auto &entry : advertisedTopics)
-  {
-    if (!entry.bridgeable || entry.bridgeSpec.empty())
-      continue;
-    if (claimed.count(EcmTopicMatcher::normalizeTopic(entry.topicName)) > 0)
-      continue;
-    additionalTopics.push_back(entry.topicName);
-  }
+  for (const auto &entry :
+       EcmTopicMatcher::bridgeableTopicsExcludingClaims(advertisedTopics, tree))
+    additionalTopics.push_back(EcmTopicMatcher::normalizeTopic(entry.topicName));
   return additionalTopics;
 }
 
