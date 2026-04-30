@@ -47,6 +47,16 @@ Rectangle {
     return ros2Type || gz || "?"
   }
 
+  function matchSourceLabel(src) {
+    if (src === "ECM exact")     return "SensorTopic exact"
+    if (src === "ECM prefix")    return "SensorTopic prefix"
+    if (src === "ECM path")      return "Gazebo standard prefix"
+    if (src === "Name match")    return "Name match"
+    if (src === "Type fallback") return "Type-compatible fallback"
+    if (src === "Unresolved")    return "Unresolved"
+    return src
+  }
+
   function matchSourceColor(src) {
     if (src === "ECM exact")     return "#0d47a1"
     if (src === "ECM prefix")    return "#1565c0"
@@ -123,11 +133,7 @@ Rectangle {
         Layout.leftMargin: 10; Layout.rightMargin: 10
         Layout.fillWidth: true
 
-        Label {
-          text: "ROS 2 Bridge Manager"
-          font.bold: true; font.pixelSize: 14
-          Layout.fillWidth: true
-        }
+        Item { Layout.fillWidth: true }
 
         CheckBox {
           text: "Debug/details"
@@ -140,7 +146,7 @@ Rectangle {
         }
 
         CheckBox {
-          text: "All"
+          text: "All models"
           font.pixelSize: 10; padding: 4
           checked: root.showModelsWithoutSensors
           onToggled: root.showModelsWithoutSensors = checked
@@ -314,12 +320,6 @@ Rectangle {
                     }
 
                     Label {
-                      text: sensorDel.sensorD.sensorName
-                      font.pixelSize: 9; font.bold: true; font.family: "monospace"; color: "#1b5e20"
-                      Layout.preferredWidth: 96; elide: Text.ElideRight
-                    }
-
-                    Label {
                       text: modelData.topic
                       font.pixelSize: 9; font.family: "monospace"; color: "#33691e"
                       Layout.fillWidth: true; elide: Text.ElideLeft
@@ -340,13 +340,6 @@ Rectangle {
                         hoverEnabled: true
                         acceptedButtons: Qt.NoButton
                       }
-                    }
-
-                    Label {
-                      visible: !root.debugMode && root.isWeakMatch(sensorDel.sensorD.matchSource)
-                      text: "verify"
-                      font.pixelSize: 8; font.italic: true; color: "#e65100"
-                      Layout.preferredWidth: 34
                     }
                   }
                 }  // topic Repeater
@@ -376,13 +369,13 @@ Rectangle {
                   Layout.fillWidth: true; Layout.leftMargin: 30; spacing: 1
 
                   Label {
-                    text: "source: " + sensorDel.sensorD.matchSource
+                    text: "source: " + root.matchSourceLabel(sensorDel.sensorD.matchSource)
                     font.pixelSize: 8; font.italic: true
                     color: root.matchSourceColor(sensorDel.sensorD.matchSource)
                   }
                   Label {
                     visible: root.isWeakMatch(sensorDel.sensorD.matchSource)
-                    text: "match detail: weak automatic match"
+                    text: "match detail: " + root.matchSourceLabel(sensorDel.sensorD.matchSource)
                     font.pixelSize: 8; font.italic: true; color: "#e65100"
                   }
                   Label {
