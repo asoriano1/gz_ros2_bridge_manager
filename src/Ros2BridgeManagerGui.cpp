@@ -135,7 +135,7 @@ std::vector<BridgeTopicCandidate> ecmToCandidates(
 
       if (!seenSpecs.insert(spec).second)
         continue;
-      coveredTopics.insert(topicName);
+      coveredTopics.insert(EcmTopicMatcher::normalizeTopic(topicName));
 
       BridgeTopicCandidate c;
       c.gzTopic    = topicName;
@@ -351,12 +351,8 @@ void Ros2BridgeManagerGui::recomputeAndPublish()
   const ModelSensorTree allSensorsTree = EcmTopicMatcher::matchAll(
       world, ecmSensors, "", discoveredTopics_);
 
-  std::unordered_set<std::string> ecmDeclaredTopics;
-  for (const auto &sensor : allSensorsTree.sensors)
-  {
-    if (!sensor.sensor.declaredTopic.empty())
-      ecmDeclaredTopics.insert(sensor.sensor.declaredTopic);
-  }
+  const std::unordered_set<std::string> claimedEcmTopics =
+      EcmTopicMatcher::claimedTopicNames(allSensorsTree);
 
   std::unordered_map<std::string, ModelSensorTree> treesByModel;
   for (const auto &modelName : discoveredModels_)
@@ -379,8 +375,6 @@ void Ros2BridgeManagerGui::recomputeAndPublish()
     tree.sensors.push_back(sensor);
   }
 
-  std::unordered_set<std::string> globalCovered;
-
   for (const auto &modelName : discoveredModels_)
   {
     static const ModelSensorTree emptyTree;
@@ -391,7 +385,6 @@ void Ros2BridgeManagerGui::recomputeAndPublish()
     std::unordered_set<std::string> modelCovered;
     std::vector<BridgeTopicCandidate> modelCands =
         ecmToCandidates(tree, mapper_, modelCovered);
-    globalCovered.insert(modelCovered.begin(), modelCovered.end());
 
     const std::string key = ModelTopicSelectionStore::keyForModel(world, modelName);
     store_.applyOverrides(key, modelCands);
@@ -409,9 +402,7 @@ void Ros2BridgeManagerGui::recomputeAndPublish()
 
   for (const auto &entry : discoveredTopics_)
   {
-    if (ecmDeclaredTopics.count(entry.topicName) > 0)
-      continue;
-    if (globalCovered.count(entry.topicName) > 0)
+    if (claimedEcmTopics.count(EcmTopicMatcher::normalizeTopic(entry.topicName)) > 0)
       continue;
 
     if (entry.bridgeable && !entry.bridgeSpec.empty())

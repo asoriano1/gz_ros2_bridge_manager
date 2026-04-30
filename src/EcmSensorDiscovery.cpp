@@ -68,6 +68,31 @@ std::string EcmTopicMatcher::defaultTopicPrefix(const std::string &worldName,
          "/sensor/" + s.sensorName;
 }
 
+std::string EcmTopicMatcher::normalizeTopic(const std::string &topic)
+{
+  if (topic.empty())
+    return {};
+
+  std::string normalized = topic;
+  while (normalized.size() > 1u && normalized.back() == '/')
+    normalized.pop_back();
+  return normalized;
+}
+
+std::unordered_set<std::string> EcmTopicMatcher::claimedTopicNames(
+    const ModelSensorTree &tree)
+{
+  std::unordered_set<std::string> claimed;
+  for (const auto &sensor : tree.sensors)
+  {
+    if (!sensor.sensor.declaredTopic.empty())
+      claimed.insert(EcmTopicMatcher::normalizeTopic(sensor.sensor.declaredTopic));
+    for (const auto &topic : sensor.matchedTopicNames)
+      claimed.insert(EcmTopicMatcher::normalizeTopic(topic));
+  }
+  return claimed;
+}
+
 // ---------------------------------------------------------------------------
 // Private helpers
 // ---------------------------------------------------------------------------
@@ -80,6 +105,37 @@ struct InferredBridgeType
   std::string gzType;
   std::string ros2Type;
 };
+
+std::string normalizeTopicValue(const std::string &topic)
+{
+  if (topic.empty())
+    return {};
+
+  std::string normalized = topic;
+  while (normalized.size() > 1u && normalized.back() == '/')
+    normalized.pop_back();
+  return normalized;
+}
+
+std::string topicDirectory(const std::string &topic)
+{
+  const auto normalized = normalizeTopicValue(topic);
+  const auto pos = normalized.find_last_of('/');
+  if (pos == std::string::npos || pos == 0u)
+    return {};
+  return normalized.substr(0, pos);
+}
+
+std::string topicLeaf(const std::string &topic)
+{
+  const auto normalized = normalizeTopicValue(topic);
+  const auto pos = normalized.find_last_of('/');
+  if (pos == std::string::npos)
+    return normalized;
+  if (pos + 1u >= normalized.size())
+    return {};
+  return normalized.substr(pos + 1u);
+}
 
 // Returns true when `name` appears as an exact path segment in `topic`.
 // E.g. "lidar" in "/model/robot/lidar/scan" → true
@@ -129,9 +185,10 @@ const GzTopicEntry *findExactTopicEntry(
     const std::string &topic,
     const std::vector<GzTopicEntry> &advertisedTopics)
 {
+  const auto normalized = normalizeTopicValue(topic);
   for (const auto &entry : advertisedTopics)
   {
-    if (entry.topicName == topic)
+    if (normalizeTopicValue(entry.topicName) == normalized)
       return &entry;
   }
   return nullptr;
@@ -159,6 +216,60 @@ InferredBridgeType inferBridgeTypeForSensor(const std::string &sensorType)
   if (sensorType == "navsat" || sensorType == "gps")
     return {"gz.msgs.NavSat", "sensor_msgs/msg/NavSatFix"};
   return {};
+}
+
+bool isCameraLikeSensor(const std::string &sensorType)
+{
+  return sensorType == "camera" ||
+         sensorType == "depth_camera" ||
+         sensorType == "rgbd_camera";
+}
+
+bool isAdvertisedCameraInfoTopic(const GzTopicEntry &entry)
+{
+  return entry.topicName.size() > 0u &&
+         entry.gzMsgType == "gz.msgs.CameraInfo" &&
+         entry.bridgeable &&
+         !entry.bridgeSpec.empty();
+}
+
+std::vector<GzTopicEntry> findAdvertisedCameraInfoTopics(
+    const EcmSensorEntry &sensor,
+    const std::vector<GzTopicEntry> &advertisedTopics)
+{
+  std::vector<GzTopicEntry> matches;
+  if (!isCameraLikeSensor(sensor.sensorType) || sensor.declaredTopic.empty())
+    return matches;
+
+  const auto normalizedTopic = normalizeTopicValue(sensor.declaredTopic);
+  const auto topicDir = topicDirectory(normalizedTopic);
+  if (topicDir.empty())
+    return matches;
+
+  const std::string directSibling = topicDir + "/camera_info";
+  std::unordered_set<std::string> seenTopics;
+
+  for (const auto &entry : advertisedTopics)
+  {
+    if (!isAdvertisedCameraInfoTopic(entry))
+      continue;
+
+    const auto normalizedEntry = normalizeTopicValue(entry.topicName);
+    const auto entryLeaf = topicLeaf(normalizedEntry);
+    const bool exactSibling = normalizedEntry == directSibling;
+    const bool sameNamespace =
+        normalizedEntry.rfind(topicDir + "/", 0) == 0 &&
+        entryLeaf == "camera_info";
+
+    if (!exactSibling && !sameNamespace)
+      continue;
+
+    if (!seenTopics.insert(normalizedEntry).second)
+      continue;
+    matches.push_back(entry);
+  }
+
+  return matches;
 }
 
 // Returns the expected ROS 2 message types for a sensor type.
@@ -262,7 +373,7 @@ void appendTopicMatch(
   sensor.matchedTopicNames.push_back(topic.topicName);
   sensor.matchedBridgeSpecs.push_back(topic.bridgeSpec);
   if (claimedTopics != nullptr)
-    claimedTopics->insert(topic.topicName);
+    claimedTopics->insert(normalizeTopicValue(topic.topicName));
 }
 
 // Try to match by sensor/link name token in the topic path combined with
@@ -417,6 +528,11 @@ DiscoveredSensor EcmTopicMatcher::matchSensor(
       result.typeSource  = "advertised";
       if (result.topicInfoGzType.empty() && !result.matchedBridgeSpecs.empty())
         result.topicInfoGzType = gzTypeFromBridgeSpec(result.matchedBridgeSpecs.front());
+
+      std::unordered_set<std::string> seenSpecs(result.matchedBridgeSpecs.begin(),
+                                                result.matchedBridgeSpecs.end());
+      for (const auto &cameraInfo : findAdvertisedCameraInfoTopics(sensor, advertisedTopics))
+        appendTopicMatch(result, cameraInfo, seenSpecs, nullptr);
       return result;
     }
 
@@ -434,6 +550,11 @@ DiscoveredSensor EcmTopicMatcher::matchSensor(
         result.typeSource = "type inferred";
         result.warning =
             "Topic type inferred from ECM sensor type; TopicInfo not available yet.";
+
+        std::unordered_set<std::string> seenSpecs(result.matchedBridgeSpecs.begin(),
+                                                  result.matchedBridgeSpecs.end());
+        for (const auto &cameraInfo : findAdvertisedCameraInfoTopics(sensor, advertisedTopics))
+          appendTopicMatch(result, cameraInfo, seenSpecs, nullptr);
         return result;
       }
     }
@@ -537,7 +658,7 @@ ModelSensorTree EcmTopicMatcher::matchAll(
         std::unordered_set<std::string> seenSpecs;
         for (size_t i = 0; i < matchedTopics.size() && i < matchedSpecs.size(); ++i)
         {
-          if (claimedTopics.count(matchedTopics[i]) > 0)
+          if (claimedTopics.count(normalizeTopicValue(matchedTopics[i])) > 0)
             continue;
 
           GzTopicEntry topic;

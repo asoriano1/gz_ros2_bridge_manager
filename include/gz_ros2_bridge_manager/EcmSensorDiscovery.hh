@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "gz_ros2_bridge_manager/GazeboTopicDiscovery.hh"
@@ -80,6 +81,14 @@ public:
   ///   /world/<world>/model/<model>/link/<link>/sensor/<sensor>
   static std::string defaultTopicPrefix(const std::string &worldName,
                                         const EcmSensorEntry &sensor);
+
+  /// Normalize a topic string for exact set membership comparisons.
+  static std::string normalizeTopic(const std::string &topic);
+
+  /// All topics claimed by the ECM sensor tree, including declared SensorTopic
+  /// values and any matched/derived topics such as camera_info.
+  static std::unordered_set<std::string> claimedTopicNames(
+      const ModelSensorTree &tree);
 
   /// Match one sensor against the full advertised-topic list.
   /// Matching priority:

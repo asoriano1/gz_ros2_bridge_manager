@@ -28,6 +28,23 @@ GzTopicEntry makeListedTopicWithoutType(const std::string &topic)
   return e;
 }
 
+std::vector<std::string> additionalTopicsAfterClaims(
+    const std::vector<GzTopicEntry> &advertisedTopics,
+    const ModelSensorTree &tree)
+{
+  const auto claimed = EcmTopicMatcher::claimedTopicNames(tree);
+  std::vector<std::string> additionalTopics;
+  for (const auto &entry : advertisedTopics)
+  {
+    if (!entry.bridgeable || entry.bridgeSpec.empty())
+      continue;
+    if (claimed.count(EcmTopicMatcher::normalizeTopic(entry.topicName)) > 0)
+      continue;
+    additionalTopics.push_back(entry.topicName);
+  }
+  return additionalTopics;
+}
+
 // Build a sensor with declaredTopic (SensorTopic component).
 EcmSensorEntry makeSensor(const std::string &model, const std::string &link,
                           const std::string &sensor, const std::string &type,
@@ -714,6 +731,126 @@ TEST(EcmTopicMatcher, MatchAllUsesInferredSensorTopicRow)
   EXPECT_EQ(tree.sensors[0].typeSource, "type inferred");
   ASSERT_EQ(tree.sensors[0].matchedTopicNames.size(), 1u);
   EXPECT_EQ(tree.sensors[0].matchedTopicNames[0], topic);
+}
+
+// ============================================================================
+// Test 30 — Inferred image topic is excluded from Additional
+// ============================================================================
+TEST(EcmTopicMatcher, InferredImageTopicIsExcludedFromAdditional)
+{
+  BridgeTypeMapper mapper;
+  const std::string imageTopic = "/sensor_test_robot_urdf_1/camera/image_raw";
+  const std::string extraTopic = "/extra/scan";
+
+  std::vector<GzTopicEntry> advertisedTopics{
+    makeListedTopicWithoutType(imageTopic),
+    makeEntry(extraTopic, "gz.msgs.LaserScan", mapper),
+  };
+
+  auto tree = EcmTopicMatcher::matchAll(
+      "default",
+      {makeSensor("robot", "base", "camera_sensor", "camera", imageTopic)},
+      "",
+      advertisedTopics);
+
+  const auto additionalTopics = additionalTopicsAfterClaims(advertisedTopics, tree);
+  EXPECT_EQ(additionalTopics.size(), 1u);
+  EXPECT_EQ(additionalTopics[0], extraTopic);
+}
+
+// ============================================================================
+// Test 31 — Inferred IMU topic is excluded from Additional
+// ============================================================================
+TEST(EcmTopicMatcher, InferredImuTopicIsExcludedFromAdditional)
+{
+  BridgeTypeMapper mapper;
+  const std::string imuTopic = "/sensor_test_robot_urdf_1/imu/data_raw";
+  const std::string extraTopic = "/extra/scan";
+
+  std::vector<GzTopicEntry> advertisedTopics{
+    makeListedTopicWithoutType(imuTopic),
+    makeEntry(extraTopic, "gz.msgs.LaserScan", mapper),
+  };
+
+  auto tree = EcmTopicMatcher::matchAll(
+      "default",
+      {makeSensor("robot", "base", "imu_sensor", "imu", imuTopic)},
+      "",
+      advertisedTopics);
+
+  const auto additionalTopics = additionalTopicsAfterClaims(advertisedTopics, tree);
+  EXPECT_EQ(additionalTopics.size(), 1u);
+  EXPECT_EQ(additionalTopics[0], extraTopic);
+}
+
+// ============================================================================
+// Test 32 — Advertised CameraInfo sibling is attached under the camera sensor
+// ============================================================================
+TEST(EcmTopicMatcher, AdvertisedCameraInfoSiblingIsAttachedToCameraSensor)
+{
+  BridgeTypeMapper mapper;
+  const std::string imageTopic = "/sensor_test_robot_urdf_1/camera/image_raw";
+  const std::string cameraInfoTopic = "/sensor_test_robot_urdf_1/camera/camera_info";
+
+  std::vector<GzTopicEntry> advertisedTopics{
+    makeListedTopicWithoutType(imageTopic),
+    makeEntry(cameraInfoTopic, "gz.msgs.CameraInfo", mapper),
+  };
+
+  auto ds = EcmTopicMatcher::matchSensor(
+      makeSensor("robot", "base", "camera_sensor", "camera", imageTopic),
+      advertisedTopics);
+
+  ASSERT_TRUE(ds.resolved);
+  ASSERT_EQ(ds.matchedTopicNames.size(), 2u);
+  EXPECT_EQ(ds.matchedTopicNames[0], imageTopic);
+  EXPECT_EQ(ds.matchedTopicNames[1], cameraInfoTopic);
+  ASSERT_EQ(ds.matchedBridgeSpecs.size(), 2u);
+  EXPECT_EQ(ds.matchedBridgeSpecs[1],
+            cameraInfoTopic + "@sensor_msgs/msg/CameraInfo@gz.msgs.CameraInfo");
+}
+
+// ============================================================================
+// Test 33 — CameraInfo is not invented when not advertised
+// ============================================================================
+TEST(EcmTopicMatcher, NonAdvertisedCameraInfoIsNotInvented)
+{
+  const std::string imageTopic = "/sensor_test_robot_urdf_1/camera/image_raw";
+
+  auto ds = EcmTopicMatcher::matchSensor(
+      makeSensor("robot", "base", "camera_sensor", "camera", imageTopic),
+      {makeListedTopicWithoutType(imageTopic)});
+
+  ASSERT_TRUE(ds.resolved);
+  ASSERT_EQ(ds.matchedTopicNames.size(), 1u);
+  EXPECT_EQ(ds.matchedTopicNames[0], imageTopic);
+}
+
+// ============================================================================
+// Test 34 — Attached CameraInfo is also excluded from Additional
+// ============================================================================
+TEST(EcmTopicMatcher, AttachedCameraInfoIsExcludedFromAdditional)
+{
+  BridgeTypeMapper mapper;
+  const std::string imageTopic = "/sensor_test_robot_urdf_1/camera/image_raw";
+  const std::string cameraInfoTopic = "/sensor_test_robot_urdf_1/camera/camera_info";
+  const std::string extraTopic = "/extra/scan";
+
+  std::vector<GzTopicEntry> advertisedTopics{
+    makeListedTopicWithoutType(imageTopic),
+    makeEntry(cameraInfoTopic, "gz.msgs.CameraInfo", mapper),
+    makeEntry(extraTopic, "gz.msgs.LaserScan", mapper),
+  };
+
+  auto tree = EcmTopicMatcher::matchAll(
+      "default",
+      {makeSensor("robot", "base", "camera_sensor", "camera", imageTopic)},
+      "",
+      advertisedTopics);
+
+  const auto additionalTopics = additionalTopicsAfterClaims(advertisedTopics, tree);
+  EXPECT_EQ(additionalTopics.size(), 1u);
+  EXPECT_EQ(additionalTopics[0], extraTopic);
 }
 
 int main(int argc, char **argv)

@@ -198,6 +198,37 @@ TEST(BridgeCommandBuilder, IncludesInferredSensorTopicSpecWhenChecked)
             std::string::npos);
 }
 
+TEST(BridgeCommandBuilder, IncludesImageImuAndCameraInfoWithoutDuplicateSpecs)
+{
+  const std::string imageSpec =
+      "/sensor_test_robot_urdf_1/camera/image_raw@sensor_msgs/msg/Image@gz.msgs.Image";
+  const std::string imuSpec =
+      "/sensor_test_robot_urdf_1/imu/data_raw@sensor_msgs/msg/Imu@gz.msgs.IMU";
+  const std::string cameraInfoSpec =
+      "/sensor_test_robot_urdf_1/camera/camera_info@sensor_msgs/msg/CameraInfo@gz.msgs.CameraInfo";
+
+  std::vector<BridgeTopicCandidate> cs{
+    make("/sensor_test_robot_urdf_1/camera/image_raw", true, true, imageSpec),
+    make("/sensor_test_robot_urdf_1/imu/data_raw", true, true, imuSpec),
+    make("/sensor_test_robot_urdf_1/camera/camera_info", true, true, cameraInfoSpec),
+    make("/sensor_test_robot_urdf_1/camera/image_raw", true, true, imageSpec),
+  };
+
+  const auto specs = BridgeCommandBuilder::selectedSpecs(cs);
+  ASSERT_EQ(specs.size(), 3u);
+  EXPECT_EQ(specs[0], imageSpec);
+  EXPECT_EQ(specs[1], imuSpec);
+  EXPECT_EQ(specs[2], cameraInfoSpec);
+
+  const std::string cmd = BridgeCommandBuilder::buildCommand(cs);
+  EXPECT_NE(cmd.find(imageSpec), std::string::npos);
+  EXPECT_NE(cmd.find(imuSpec), std::string::npos);
+  EXPECT_NE(cmd.find(cameraInfoSpec), std::string::npos);
+  const auto firstImage = cmd.find(imageSpec);
+  ASSERT_NE(firstImage, std::string::npos);
+  EXPECT_EQ(cmd.find(imageSpec, firstImage + 1), std::string::npos);
+}
+
 int main(int argc, char **argv)
 {
   ::testing::InitGoogleTest(&argc, argv);
