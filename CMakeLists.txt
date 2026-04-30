@@ -177,6 +177,17 @@ if(BUILD_TESTING)
   target_include_directories(test_ecm_sensor_discovery
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
   )
+
+  ament_add_gtest(test_ecm_sensor_extractor
+    test/test_ecm_sensor_extractor.cpp
+    src/EcmSensorExtractor.cpp
+  )
+  target_include_directories(test_ecm_sensor_extractor
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
+  target_link_libraries(test_ecm_sensor_extractor
+    gz-sim8::gz-sim8
+  )
 endif()
 
 ament_package()

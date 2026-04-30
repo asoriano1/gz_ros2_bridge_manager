@@ -397,6 +397,10 @@ DiscoveredSensor EcmTopicMatcher::matchSensor(
       result.resolved    = true;
       return result;
     }
+
+    result.warning =
+        "SensorTopic was present in ECM but no advertised topic matched it yet.";
+    return result;
   }
 
   // Priority 2: Gazebo standard path (fallbackGazeboTopicPrefix)
@@ -479,9 +483,16 @@ ModelSensorTree EcmTopicMatcher::matchAll(
       strongSource = tryMatchPrefix(
           s.declaredTopic, s.sensorType, advertisedTopics,
           strongTopics, strongSpecs);
+
+      if (strongSource == MatchSource::Unresolved)
+      {
+        sensorResult.warning =
+            "SensorTopic was present in ECM but no advertised topic matched it yet.";
+      }
     }
 
-    if (strongSource == MatchSource::Unresolved &&
+    if (s.declaredTopic.empty() &&
+        strongSource == MatchSource::Unresolved &&
         !s.fallbackGazeboTopicPrefix.empty())
     {
       strongSource = tryMatchPrefix(
@@ -610,6 +621,12 @@ ModelSensorTree EcmTopicMatcher::matchAll(
         sensorResult.warning =
             "Matched by type after model-safe filtering — verify this is the correct topic.";
       }
+    }
+    else if (!sensorResult.sensor.declaredTopic.empty() &&
+             sensorResult.warning.empty())
+    {
+      sensorResult.warning =
+          "SensorTopic was present in ECM but no advertised topic matched it yet.";
     }
     else if (sensorHadWeakCandidates[i])
     {

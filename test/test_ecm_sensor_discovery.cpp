@@ -638,6 +638,27 @@ TEST(EcmTopicMatcher, MultipleGenericCompatibleTopicsStayUnresolved)
   EXPECT_TRUE(ds.matchedTopicNames.empty());
 }
 
+// ============================================================================
+// Test 27 — SensorTopic must not fall back to unrelated type-compatible topics
+// ============================================================================
+TEST(EcmTopicMatcher, DeclaredTopicPreventsTypeCompatibleFallback)
+{
+  BridgeTypeMapper mapper;
+
+  std::vector<GzTopicEntry> adv{
+    makeEntry("/some/unrelated/scan", "gz.msgs.LaserScan", mapper),
+  };
+
+  EcmSensorEntry s = makeSensor(
+      "robot", "base", "front_laser", "gpu_lidar", "/robot/front_laser");
+
+  auto ds = EcmTopicMatcher::matchSensor(s, adv);
+  EXPECT_FALSE(ds.resolved);
+  EXPECT_EQ(ds.matchSource, MatchSource::Unresolved);
+  EXPECT_TRUE(ds.matchedTopicNames.empty());
+  EXPECT_NE(ds.warning.find("SensorTopic"), std::string::npos);
+}
+
 int main(int argc, char **argv)
 {
   ::testing::InitGoogleTest(&argc, argv);

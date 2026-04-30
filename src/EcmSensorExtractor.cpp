@@ -110,6 +110,8 @@ std::vector<EcmSensorEntry> EcmSensorExtractor::extract(
 
       const auto *topicCmp =
           ecm.Component<gz::sim::components::SensorTopic>(sensorEnt);
+      // Gazebo's Entity Tree / Component Inspector surfaces this exact
+      // components::SensorTopic value as "Sensor Topic" for the sensor entity.
       if (topicCmp)
         e.declaredTopic = topicCmp->Data();
 
