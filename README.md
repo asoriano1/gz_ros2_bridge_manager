@@ -4,13 +4,65 @@ Gazebo Harmonic GUI plugin for ROS 2 Jazzy that discovers ECM sensor topics,
 maps them to `ros_gz_bridge`, and lets you run the resulting bridge directly
 from the Gazebo UI.
 
-It is designed to work as the second step of a lightweight Gazebo/ROS 2
-workflow:
+## Gazebo ROS 2 Model Runtime Suite
 
-1. Import or spawn the robot with
-   [`gz_model_importer_gui`](https://github.com/asoriano1/gz_model_importer_plugin)
-2. Open `gz_ros2_bridge_manager`
-3. Review sensor topics and start the corresponding `ros_gz_bridge`
+This project is part of a broader **Gazebo ROS 2 Model Runtime Suite**: a set
+of Gazebo GUI tools designed to take a robot or model from a description file
+to a ROS 2-ready simulation runtime.
+
+This package provides the **Gazebo ROS 2 Bridge Manager** step of that
+workflow. It is intended to be used after the model is already present in the
+Gazebo world, typically after importing it with
+[`gz_model_importer_gui`](https://github.com/asoriano1/gz_model_importer_plugin).
+
+```text
+URDF / XACRO / SDF
+       │
+       ▼
+gz_model_importer_gui
+       │
+       ├── Preview model
+       ├── Spawn final model in Gazebo
+       └── Optional robot_state_publisher for URDF/XACRO
+       │
+       ▼
+Gazebo world + ROS 2 TF tree
+       │
+       ▼
+gz_ros2_bridge_manager
+       │
+       ├── Discover ECM sensors and Gazebo topics
+       ├── Build bridge specs
+       └── Run ros_gz_bridge
+       │
+       ▼
+ROS 2 tools and applications
+RViz · Nav2 · MoveIt · custom nodes
+```
+
+## Current scope
+
+Implemented in this plugin:
+
+- ECM-first Gazebo sensor discovery
+- Gazebo topic classification and bridge type mapping
+- Compact model-by-model topic selection
+- Direct `ros_gz_bridge` runtime control from the Gazebo UI
+- Managed bridge process output and restart workflow
+
+Provided by the companion importer:
+
+- Model preview before final import
+- Final URDF / XACRO / SDF spawn into Gazebo
+- Optional `robot_state_publisher` launch for URDF / XACRO models
+
+Not currently handled by this plugin:
+
+- URDF / XACRO / SDF parsing
+- `robot_description` generation
+- `ros2_control` controller management
+- Nav2 or MoveIt launch
+- A full ROS 2 runtime process dashboard
 
 ## Demo
 
@@ -29,11 +81,15 @@ workflow:
 - Runs, stops, and restarts the bridge process from the UI
 - Captures bridge output and exposes compact debug details when needed
 
-## Scope
+## What this enables
 
-This plugin intentionally focuses on runtime discovery and bridge orchestration.
-It does not parse URDF, SDF, XACRO, `robot_description`, controller metadata,
-or importer-side configuration files.
+With the importer and bridge manager together, a typical user can:
+
+1. Load a URDF, XACRO, or SDF model into a running Gazebo world.
+2. Optionally start `robot_state_publisher` for URDF / XACRO models.
+3. Discover the model's Gazebo sensor topics directly from the running world.
+4. Launch the required `ros_gz_bridge` mappings from the Gazebo UI.
+5. Connect RViz, Nav2, MoveIt, or custom ROS 2 nodes to the simulation runtime.
 
 ## Quick start
 
@@ -173,3 +229,7 @@ See [`docs/architecture.md`](docs/architecture.md) for more detail.
 - Only common sensor topic types are inferred when `TopicInfo` is missing
 - Non-standard plugin topics still depend on what Gazebo advertises at runtime
 - The plugin manages only the bridge process it starts itself
+
+## Author
+
+Ángel Soriano — [Robotnik Automation S.L.L.](https://robotnik.es)
