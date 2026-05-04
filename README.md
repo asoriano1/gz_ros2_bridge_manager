@@ -23,6 +23,10 @@ This repository provides the **Bridge Manager** step.
 - Lets the user run, stop, and restart the managed bridge from Gazebo
 - Fits naturally after a model has been imported with `gz_model_importer_plugin`
 
+## Demo
+
+![Bridge manager demo](demo1.gif)
+
 ## Requirements
 
 - Ubuntu 24.04
