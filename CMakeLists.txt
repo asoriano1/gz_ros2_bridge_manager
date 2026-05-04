@@ -34,17 +34,14 @@ find_package(Qt5 REQUIRED COMPONENTS Core Concurrent Gui Quick QuickControls2)
 set(PLUGIN_NAME Ros2BridgeManagerGui)
 
 set(PLUGIN_SOURCES
+  src/BridgeTopicCandidate.cpp
   src/BridgeProcessManager.cpp
   src/Ros2BridgeManagerGui.cpp
   src/BridgeTypeMapper.cpp
-  src/WorldDiscovery.cpp
   src/GazeboTopicDiscovery.cpp
-  src/EcmSensorDiscovery.cpp
-  src/EcmSensorExtractor.cpp
-  src/ModelSensorDiscovery.cpp
-  src/TopicAssociationHeuristic.cpp
+  src/TopicAssociation.cpp
+  src/EcmDiscovery.cpp
   src/BridgeCommandBuilder.cpp
-  src/BridgeSession.cpp
   src/ModelTopicSelectionStore.cpp
 )
 
@@ -117,15 +114,6 @@ if(BUILD_TESTING)
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
   )
 
-  ament_add_gtest(test_topic_association_heuristic
-    test/test_topic_association_heuristic.cpp
-    src/TopicAssociationHeuristic.cpp
-    src/BridgeTypeMapper.cpp
-  )
-  target_include_directories(test_topic_association_heuristic
-    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  )
-
   ament_add_gtest(test_bridge_command_builder
     test/test_bridge_command_builder.cpp
     src/BridgeCommandBuilder.cpp
@@ -142,18 +130,6 @@ if(BUILD_TESTING)
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
   )
 
-  ament_add_gtest(test_bridge_session
-    test/test_bridge_session.cpp
-    src/BridgeSession.cpp
-    src/BridgeCommandBuilder.cpp
-    src/ModelTopicSelectionStore.cpp
-    src/TopicAssociationHeuristic.cpp
-    src/BridgeTypeMapper.cpp
-  )
-  target_include_directories(test_bridge_session
-    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
-  )
-
   ament_add_gtest(test_bridge_process_manager
     test/test_bridge_process_manager.cpp
     src/BridgeProcessManager.cpp
@@ -166,26 +142,26 @@ if(BUILD_TESTING)
     Qt5::Core
   )
 
-  # Pure matching logic — only EcmSensorDiscovery + BridgeTypeMapper needed.
+  # Pure association logic — only TopicAssociation + BridgeTypeMapper needed.
   # GazeboTopicDiscovery.cpp is NOT compiled here (would require gz-transport13);
   # tests only use the GzTopicEntry struct from the header.
-  ament_add_gtest(test_ecm_sensor_discovery
+  ament_add_gtest(test_topic_association
     test/test_ecm_sensor_discovery.cpp
-    src/EcmSensorDiscovery.cpp
+    src/TopicAssociation.cpp
     src/BridgeTypeMapper.cpp
   )
-  target_include_directories(test_ecm_sensor_discovery
+  target_include_directories(test_topic_association
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
   )
 
-  ament_add_gtest(test_ecm_sensor_extractor
+  ament_add_gtest(test_ecm_discovery
     test/test_ecm_sensor_extractor.cpp
-    src/EcmSensorExtractor.cpp
+    src/EcmDiscovery.cpp
   )
-  target_include_directories(test_ecm_sensor_extractor
+  target_include_directories(test_ecm_discovery
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
   )
-  target_link_libraries(test_ecm_sensor_extractor
+  target_link_libraries(test_ecm_discovery
     gz-sim8::gz-sim8
   )
 endif()

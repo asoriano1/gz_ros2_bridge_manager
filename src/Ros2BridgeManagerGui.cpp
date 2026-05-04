@@ -17,10 +17,8 @@
 #include <gz/sim/EntityComponentManager.hh>
 
 #include "gz_ros2_bridge_manager/BridgeCommandBuilder.hh"
-#include "gz_ros2_bridge_manager/EcmSensorDiscovery.hh"
-#include "gz_ros2_bridge_manager/EcmSensorExtractor.hh"
-#include "gz_ros2_bridge_manager/TopicAssociationHeuristic.hh"  // isGenericTopic static helper
-#include "gz_ros2_bridge_manager/WorldDiscovery.hh"
+#include "gz_ros2_bridge_manager/EcmDiscovery.hh"
+#include "gz_ros2_bridge_manager/TopicAssociation.hh"
 
 // Q_INIT_RESOURCE must live outside any namespace.
 static void initBridgeManagerResources()
@@ -72,39 +70,36 @@ std::string normalizeBridgeSpecTopic(const std::string &spec)
   const auto at1 = spec.find('@');
   if (at1 == std::string::npos)
     return spec;
-  return EcmTopicMatcher::normalizeTopic(spec.substr(0, at1)) + spec.substr(at1);
+  return TopicAssociation::normalizeTopic(spec.substr(0, at1)) + spec.substr(at1);
 }
 
 std::string matchedTopicSourceLabel(const DiscoveredSensor &ds,
                                     const std::string &topic,
                                     const std::string &gzType)
 {
-  const std::string normalizedTopic = EcmTopicMatcher::normalizeTopic(topic);
+  const std::string normalizedTopic = TopicAssociation::normalizeTopic(topic);
   const std::string normalizedDeclared =
-      EcmTopicMatcher::normalizeTopic(ds.sensor.declaredTopic);
+      TopicAssociation::normalizeTopic(ds.sensor.declaredTopic);
 
   if (!normalizedDeclared.empty() && normalizedTopic == normalizedDeclared)
   {
     if (ds.typeSource == "advertised")
-      return "TopicInfo";
+      return "exact/advertised";
     if (ds.typeSource == "type inferred")
-      return "inferred from sensorType";
-    return "ECM SensorTopic";
+      return "exact/inferred";
+    return "exact";
   }
 
   if (gzType == "gz.msgs.CameraInfo")
-    return "derived camera_info";
+    return "runtime-derived";
 
   if (ds.matchSource == MatchSource::EcmSensorTopicExact ||
       ds.matchSource == MatchSource::EcmSensorTopicPrefix)
   {
-    return "ECM SensorTopic";
+    return "exact";
   }
 
-  if (ds.matchSource == MatchSource::EcmStandardPrefix)
-    return "other";
-
-  return "other";
+  return "unresolved";
 }
 
 bool containsCameraOrInfo(const std::string &value)
@@ -126,11 +121,8 @@ QVariantMap toVariantMap(const BridgeTopicCandidate &c)
   m[QStringLiteral("ros2Type")]   = QString::fromStdString(c.ros2Type);
   m[QStringLiteral("bridgeSpec")] = QString::fromStdString(c.bridgeSpec);
   m[QStringLiteral("category")]   = QString::fromLatin1(categoryName(c.category));
-  m[QStringLiteral("confidence")] = QString::fromStdString(c.confidenceLabel);
   m[QStringLiteral("bridgeable")] = c.bridgeable;
   m[QStringLiteral("checked")]    = c.checked;
-  m[QStringLiteral("ambiguous")]  = c.ambiguous;
-  m[QStringLiteral("isGeneric")]  = c.isGeneric;
   m[QStringLiteral("warning")]    = QString::fromStdString(c.warning);
   return m;
 }
@@ -208,8 +200,7 @@ std::vector<BridgeTopicCandidate> ecmToCandidates(
     // ECM-declared SensorTopic matches are auto-checked by default.
     const bool strongMatch =
         (ds.matchSource == MatchSource::EcmSensorTopicExact  ||
-         ds.matchSource == MatchSource::EcmSensorTopicPrefix ||
-         ds.matchSource == MatchSource::EcmStandardPrefix);
+         ds.matchSource == MatchSource::EcmSensorTopicPrefix);
 
     for (size_t i = 0; i < ds.matchedTopicNames.size(); ++i)
     {
@@ -218,16 +209,14 @@ std::vector<BridgeTopicCandidate> ecmToCandidates(
 
       if (!seenSpecs.insert(spec).second)
         continue;
-      coveredTopics.insert(EcmTopicMatcher::normalizeTopic(topicName));
+      coveredTopics.insert(TopicAssociation::normalizeTopic(topicName));
 
       BridgeTopicCandidate c;
       c.gzTopic    = topicName;
       c.bridgeSpec = spec;
       c.bridgeable = true;
-      c.checked    = strongMatch;   // weak matches start unchecked
-      c.category   = AssociationCategory::EcmConfirmed;
-      c.confidenceLabel = std::string(matchSourceName(ds.matchSource));
-      c.isGeneric  = false;
+      c.checked    = strongMatch;
+      c.category   = AssociationCategory::EcmAssociated;
       c.warning    = ds.warning;
 
       const auto at1 = spec.find('@');
@@ -252,8 +241,7 @@ std::vector<BridgeTopicCandidate> ecmToCandidates(
                     : ds.sensor.fallbackGazeboTopicPrefix;
       c.bridgeable      = false;
       c.checked         = false;
-      c.category        = AssociationCategory::EcmConfirmed;
-      c.confidenceLabel = "ECM (no topic yet)";
+      c.category        = AssociationCategory::EcmAssociated;
       c.warning         = ds.warning;
       result.push_back(std::move(c));
     }
@@ -309,7 +297,7 @@ void Ros2BridgeManagerGui::LoadConfig(const tinyxml2::XMLElement * /*_pluginElem
 void Ros2BridgeManagerGui::Update(const gz::sim::UpdateInfo & /*_info*/,
                                    gz::sim::EntityComponentManager &_ecm)
 {
-  const size_t newFingerprint = EcmSensorExtractor::computeFingerprint(_ecm);
+  const size_t newFingerprint = EcmDiscovery::computeFingerprint(_ecm);
 
   {
     std::lock_guard<std::mutex> lk(ecmMutex_);
@@ -317,15 +305,16 @@ void Ros2BridgeManagerGui::Update(const gz::sim::UpdateInfo & /*_info*/,
       return;
   }
 
-  std::vector<EcmSensorEntry> newSensors = EcmSensorExtractor::extract(_ecm);
+  EcmWorldSnapshot newSnapshot = EcmDiscovery::extract(_ecm);
 
   gzdbg << "[BridgeManager] ECM sensor state changed: "
-        << newSensors.size() << " sensor(s) detected\n";
+        << newSnapshot.sensors.size() << " sensor(s) detected across "
+        << newSnapshot.models.size() << " model(s)\n";
 
   bool shouldNotify = false;
   {
     std::lock_guard<std::mutex> lk(ecmMutex_);
-    ecmSensors_     = std::move(newSensors);
+    ecmSnapshot_    = std::move(newSnapshot);
     ecmFingerprint_ = newFingerprint;
     if (!ecmUpdatePending_.exchange(true))
       shouldNotify = true;
@@ -418,27 +407,76 @@ QVariantMap Ros2BridgeManagerGui::buildModelCard(
 void Ros2BridgeManagerGui::recomputeAndPublish()
 {
   // 1. ECM snapshot (thread-safe copy).
-  std::vector<EcmSensorEntry> ecmSensors;
+  EcmWorldSnapshot ecmSnapshot;
   {
     std::lock_guard<std::mutex> lk(ecmMutex_);
-    ecmSensors = ecmSensors_;
+    ecmSnapshot = ecmSnapshot_;
   }
 
-  const std::string world = worldName_.toStdString();
+  const QString snapshotWorldName = QString::fromStdString(ecmSnapshot.worldName);
+  if (snapshotWorldName != worldName_)
+  {
+    worldName_ = snapshotWorldName;
+    emit worldNameChanged();
+  }
+
+  const std::string world = ecmSnapshot.worldName;
 
   // 2. Per-model: ECM match + candidate building.
   perModelCands_.clear();
   perModelTrees_.clear();
   warnings_.clear();
 
-  const ModelSensorTree allSensorsTree = EcmTopicMatcher::matchAll(
-      world, ecmSensors, "", discoveredTopics_);
+  const ModelSensorTree allSensorsTree = TopicAssociation::matchAll(
+      world, ecmSnapshot.sensors, "", discoveredTopics_);
 
   const std::unordered_set<std::string> claimedEcmTopics =
-      EcmTopicMatcher::claimedTopicNames(allSensorsTree);
+      TopicAssociation::claimedTopicNames(allSensorsTree);
+
+  std::vector<std::string> modelNames;
+  modelNames.reserve(ecmSnapshot.models.size());
+  std::unordered_map<std::string, ModelSensorTree> treesByModel;
+  for (const auto &model : ecmSnapshot.models)
+  {
+    modelNames.push_back(model.modelName);
+    ModelSensorTree tree;
+    tree.worldName = world;
+    tree.modelName = model.modelName;
+    tree.ecmConfirmed = true;
+    treesByModel.emplace(model.modelName, std::move(tree));
+  }
+
+  for (const auto &sensor : allSensorsTree.sensors)
+  {
+    auto &tree = treesByModel[sensor.sensor.modelName];
+    if (tree.worldName.empty())
+      tree.worldName = world;
+    if (tree.modelName.empty())
+      tree.modelName = sensor.sensor.modelName;
+    tree.ecmConfirmed = true;
+    tree.sensors.push_back(sensor);
+  }
 
   if (kDebugTopicAssignment)
   {
+    debugLog("ECM models:");
+    for (const auto &model : ecmSnapshot.models)
+    {
+      std::ostringstream modelLog;
+      modelLog << "  model=" << model.modelName
+               << "(" << model.modelEntity << ")"
+               << ", nested=" << (model.nestedModel ? "true" : "false");
+      debugLog(modelLog.str());
+
+      for (const auto &link : model.links)
+      {
+        std::ostringstream linkLog;
+        linkLog << "    link=" << link.linkName
+                << "(" << link.linkEntity << ")";
+        debugLog(linkLog.str());
+      }
+    }
+
     debugLog("claimed topics:");
     for (const auto &topic : claimedEcmTopics)
       debugLog("  claimed: " + topic);
@@ -453,7 +491,7 @@ void Ros2BridgeManagerGui::recomputeAndPublish()
       }
 
       std::ostringstream oss;
-      oss << "  discovered: topic=" << EcmTopicMatcher::normalizeTopic(entry.topicName)
+      oss << "  discovered: topic=" << TopicAssociation::normalizeTopic(entry.topicName)
           << ", gzType=" << (entry.gzMsgType.empty() ? "<none>" : entry.gzMsgType)
           << ", rosType=" << (entry.ros2MsgType.empty() ? "<none>" : entry.ros2MsgType)
           << ", bridgeable=" << (entry.bridgeable ? "true" : "false");
@@ -461,28 +499,7 @@ void Ros2BridgeManagerGui::recomputeAndPublish()
     }
   }
 
-  std::unordered_map<std::string, ModelSensorTree> treesByModel;
-  for (const auto &modelName : discoveredModels_)
-  {
-    ModelSensorTree tree;
-    tree.worldName = world;
-    tree.modelName = modelName;
-    tree.ecmConfirmed = true;
-    treesByModel.emplace(modelName, std::move(tree));
-  }
-
-  for (const auto &sensor : allSensorsTree.sensors)
-  {
-    auto &tree = treesByModel[sensor.sensor.modelName];
-    if (tree.worldName.empty())
-      tree.worldName = world;
-    if (tree.modelName.empty())
-      tree.modelName = sensor.sensor.modelName;
-    tree.ecmConfirmed = true;
-    tree.sensors.push_back(sensor);
-  }
-
-  for (const auto &modelName : discoveredModels_)
+  for (const auto &modelName : modelNames)
   {
     static const ModelSensorTree emptyTree;
     const auto treeIt = treesByModel.find(modelName);
@@ -508,7 +525,7 @@ void Ros2BridgeManagerGui::recomputeAndPublish()
   const std::string addKey = world + "::" + kAdditionalMarker;
 
   const auto additionalBridgeableTopics =
-      EcmTopicMatcher::bridgeableTopicsExcludingClaims(discoveredTopics_, allSensorsTree);
+      TopicAssociation::bridgeableTopicsExcludingClaims(discoveredTopics_, allSensorsTree);
 
   if (kDebugTopicAssignment)
   {
@@ -536,7 +553,7 @@ void Ros2BridgeManagerGui::recomputeAndPublish()
         for (size_t i = 0; i < sensor.matchedTopicNames.size(); ++i)
         {
           const std::string topic =
-              EcmTopicMatcher::normalizeTopic(sensor.matchedTopicNames[i]);
+              TopicAssociation::normalizeTopic(sensor.matchedTopicNames[i]);
           const std::string spec =
               i < sensor.matchedBridgeSpecs.size() ? sensor.matchedBridgeSpecs[i] : std::string{};
           const std::string gzType = gzTypeFromBridgeSpec(spec);
@@ -558,36 +575,35 @@ void Ros2BridgeManagerGui::recomputeAndPublish()
     {
       if (!entry.bridgeable || entry.bridgeSpec.empty())
         continue;
-      debugLog("  additional-pre: " + EcmTopicMatcher::normalizeTopic(entry.topicName));
+      debugLog("  additional-pre: " + TopicAssociation::normalizeTopic(entry.topicName));
     }
 
     debugLog("additional topics after dedup:");
     for (const auto &entry : additionalBridgeableTopics)
-      debugLog("  additional-post: " + EcmTopicMatcher::normalizeTopic(entry.topicName));
+      debugLog("  additional-post: " + TopicAssociation::normalizeTopic(entry.topicName));
   }
 
   for (const auto &entry : additionalBridgeableTopics)
   {
     BridgeTopicCandidate c;
-    c.gzTopic    = EcmTopicMatcher::normalizeTopic(entry.topicName);
+    c.gzTopic    = TopicAssociation::normalizeTopic(entry.topicName);
     c.gzType     = entry.gzMsgType;
     c.ros2Type   = entry.ros2MsgType;
     c.bridgeSpec = normalizeBridgeSpecTopic(entry.bridgeSpec);
     c.bridgeable = true;
-    c.checked    = false;  // additional topics unchecked by default
-    c.category   = AssociationCategory::CompatibleButUnassigned;
-    c.isGeneric  = TopicAssociationHeuristic::isGenericTopic(entry.topicName);
+    c.checked    = false;
+    c.category   = AssociationCategory::Additional;
     additionalCands_.push_back(std::move(c));
   }
 
   for (const auto &entry : discoveredTopics_)
   {
-    if (claimedEcmTopics.count(EcmTopicMatcher::normalizeTopic(entry.topicName)) > 0)
+    if (claimedEcmTopics.count(TopicAssociation::normalizeTopic(entry.topicName)) > 0)
       continue;
     if (!entry.bridgeable)
     {
       BridgeTopicCandidate c;
-      c.gzTopic    = EcmTopicMatcher::normalizeTopic(entry.topicName);
+      c.gzTopic    = TopicAssociation::normalizeTopic(entry.topicName);
       c.gzType     = entry.gzMsgType;
       c.bridgeable = false;
       c.checked    = false;
@@ -607,7 +623,15 @@ void Ros2BridgeManagerGui::rebuildModelCards()
 {
   modelCards_.clear();
 
-  for (const auto &modelName : discoveredModels_)
+  std::vector<std::string> modelNames;
+  {
+    std::lock_guard<std::mutex> lk(ecmMutex_);
+    modelNames.reserve(ecmSnapshot_.models.size());
+    for (const auto &model : ecmSnapshot_.models)
+      modelNames.push_back(model.modelName);
+  }
+
+  for (const auto &modelName : modelNames)
   {
     static const ModelSensorTree emptyTree;
     static const std::vector<BridgeTopicCandidate> emptyCands;
@@ -638,7 +662,15 @@ void Ros2BridgeManagerGui::rebuildBridgeCommand()
 {
   // All candidates in discovery order: per-model then additional.
   std::vector<BridgeTopicCandidate> allCands;
-  for (const auto &modelName : discoveredModels_)
+  std::vector<std::string> modelNames;
+  {
+    std::lock_guard<std::mutex> lk(ecmMutex_);
+    modelNames.reserve(ecmSnapshot_.models.size());
+    for (const auto &model : ecmSnapshot_.models)
+      modelNames.push_back(model.modelName);
+  }
+
+  for (const auto &modelName : modelNames)
   {
     auto it = perModelCands_.find(modelName);
     if (it != perModelCands_.end())
@@ -667,7 +699,7 @@ void Ros2BridgeManagerGui::rebuildBridgeCommand()
 }
 
 // ============================================================================
-// Refresh — discover world + topics, then recompute
+// Refresh — discover Gazebo Transport topics, then recompute with ECM snapshot
 // ============================================================================
 
 void Ros2BridgeManagerGui::refresh()
@@ -682,37 +714,28 @@ void Ros2BridgeManagerGui::refresh()
 
   QtConcurrent::run([self]()
   {
-    WorldDiscovery       worldDisc;
     GazeboTopicDiscovery topicDisc;
-
-    const WorldInfo worldInfo = worldDisc.discover();
-    const auto      topics    = topicDisc.discover(self->mapper_);
+    const auto topics = topicDisc.discover(self->mapper_);
 
     QMetaObject::invokeMethod(self,
-      [self, worldInfo, topics]()
+      [self, topics]()
       {
-        const QString newWorld = QString::fromStdString(worldInfo.worldName);
-        if (newWorld != self->worldName_)
-        {
-          self->worldName_ = newWorld;
-          emit self->worldNameChanged();
-        }
-
-        self->discoveredModels_ = worldInfo.modelNames;
         self->discoveredTopics_ = topics;
 
-        if (!worldInfo.errorMessage.empty())
+        size_t modelCount = 0;
         {
-          self->setStatus(QString::fromStdString(worldInfo.errorMessage));
+          std::lock_guard<std::mutex> lk(self->ecmMutex_);
+          modelCount = self->ecmSnapshot_.models.size();
         }
+
+        if (self->worldName_.isEmpty() && topics.empty())
+          self->setStatus(QStringLiteral("No ECM world snapshot or Gazebo topics discovered yet."));
         else
-        {
           self->setStatus(
               QString("World: %1  •  Models: %2  •  Topics: %3")
-                  .arg(self->worldName_)
-                  .arg(static_cast<int>(worldInfo.modelNames.size()))
+                  .arg(self->worldName_.isEmpty() ? QStringLiteral("<pending ECM>") : self->worldName_)
+                  .arg(static_cast<int>(modelCount))
                   .arg(static_cast<int>(topics.size())));
-        }
 
         self->lastRefreshTime_ =
           QDateTime::currentDateTime().toString(QStringLiteral("hh:mm:ss"));

@@ -1,6 +1,10 @@
-#include "gz_ros2_bridge_manager/EcmSensorExtractor.hh"
+#include "gz_ros2_bridge_manager/EcmDiscovery.hh"
 
+#include <algorithm>
 #include <functional>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
 
 #include <gz/common/Console.hh>
 #include <gz/sim/EntityComponentManager.hh>
@@ -63,14 +67,62 @@ std::string getWorldName(const gz::sim::EntityComponentManager &ecm)
   return name;
 }
 
+template<typename TMap>
+std::vector<typename TMap::mapped_type> valuesSortedByName(TMap &&map)
+{
+  std::vector<typename TMap::mapped_type> values;
+  values.reserve(map.size());
+  for (auto &entry : map)
+    values.push_back(std::move(entry.second));
+
+  std::sort(values.begin(), values.end(),
+      [](const auto &lhs, const auto &rhs)
+      {
+        if (lhs.modelName != rhs.modelName)
+          return lhs.modelName < rhs.modelName;
+        return lhs.modelEntity < rhs.modelEntity;
+      });
+  return values;
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
 
-size_t EcmSensorExtractor::computeFingerprint(
+size_t EcmDiscovery::computeFingerprint(
     const gz::sim::EntityComponentManager &ecm)
 {
   size_t fp = 0;
+  ecm.Each<gz::sim::components::World, gz::sim::components::Name>(
+    [&](const gz::sim::Entity &worldEnt,
+        const gz::sim::components::World *,
+        const gz::sim::components::Name *nameCmp) -> bool
+    {
+      hashCombine(fp, std::hash<uint64_t>{}(static_cast<uint64_t>(worldEnt)));
+      hashCombine(fp, std::hash<std::string>{}(nameCmp->Data()));
+      return true;
+    });
+
+  ecm.Each<gz::sim::components::Model, gz::sim::components::Name>(
+    [&](const gz::sim::Entity &modelEnt,
+        const gz::sim::components::Model *,
+        const gz::sim::components::Name *nameCmp) -> bool
+    {
+      hashCombine(fp, std::hash<uint64_t>{}(static_cast<uint64_t>(modelEnt)));
+      hashCombine(fp, std::hash<std::string>{}(nameCmp->Data()));
+      return true;
+    });
+
+  ecm.Each<gz::sim::components::Link, gz::sim::components::Name>(
+    [&](const gz::sim::Entity &linkEnt,
+        const gz::sim::components::Link *,
+        const gz::sim::components::Name *nameCmp) -> bool
+    {
+      hashCombine(fp, std::hash<uint64_t>{}(static_cast<uint64_t>(linkEnt)));
+      hashCombine(fp, std::hash<std::string>{}(nameCmp->Data()));
+      return true;
+    });
+
   ecm.Each<gz::sim::components::Sensor>(
     [&](const gz::sim::Entity &sensorEnt,
         const gz::sim::components::Sensor *) -> bool
@@ -89,12 +141,70 @@ size_t EcmSensorExtractor::computeFingerprint(
 
 // ---------------------------------------------------------------------------
 
-std::vector<EcmSensorEntry> EcmSensorExtractor::extract(
+EcmWorldSnapshot EcmDiscovery::extract(
     const gz::sim::EntityComponentManager &ecm)
 {
-  const std::string worldName = getWorldName(ecm);
+  EcmWorldSnapshot snapshot;
+  snapshot.worldName = getWorldName(ecm);
 
-  std::vector<EcmSensorEntry> result;
+  std::unordered_map<EntityId, EcmModelEntry> modelsByEntity;
+  ecm.Each<gz::sim::components::Model,
+           gz::sim::components::Name,
+           gz::sim::components::ParentEntity>(
+    [&](const gz::sim::Entity &modelEnt,
+        const gz::sim::components::Model *,
+        const gz::sim::components::Name *nameCmp,
+        const gz::sim::components::ParentEntity *parentCmp) -> bool
+    {
+      EcmModelEntry model;
+      model.modelEntity = static_cast<EntityId>(modelEnt);
+      model.modelName = nameCmp->Data();
+
+      const gz::sim::Entity parentEnt = parentCmp ? parentCmp->Data()
+                                                  : gz::sim::kNullEntity;
+      model.nestedModel =
+          ecm.Component<gz::sim::components::Model>(parentEnt) != nullptr;
+
+      modelsByEntity[model.modelEntity] = std::move(model);
+      return true;
+    });
+
+  std::unordered_set<uint64_t> seenLinks;
+  ecm.Each<gz::sim::components::Link,
+           gz::sim::components::Name,
+           gz::sim::components::ParentEntity>(
+    [&](const gz::sim::Entity &linkEnt,
+        const gz::sim::components::Link *,
+        const gz::sim::components::Name *nameCmp,
+        const gz::sim::components::ParentEntity *parentCmp) -> bool
+    {
+      gz::sim::Entity currentEnt = parentCmp->Data();
+      while (currentEnt != gz::sim::kNullEntity)
+      {
+        if (ecm.Component<gz::sim::components::Model>(currentEnt) != nullptr)
+        {
+          const EntityId modelId = static_cast<EntityId>(currentEnt);
+          auto it = modelsByEntity.find(modelId);
+          if (it != modelsByEntity.end() &&
+              seenLinks.insert(static_cast<uint64_t>(linkEnt)).second)
+          {
+            it->second.links.push_back(EcmLinkEntry{
+                static_cast<EntityId>(linkEnt), nameCmp->Data()});
+          }
+          break;
+        }
+
+        const auto *ancestorParentCmp =
+            ecm.Component<gz::sim::components::ParentEntity>(currentEnt);
+        if (!ancestorParentCmp)
+          break;
+        currentEnt = ancestorParentCmp->Data();
+      }
+
+      return true;
+    });
+
+  std::vector<EcmSensorEntry> sensors;
 
   ecm.Each<gz::sim::components::Sensor,
             gz::sim::components::Name,
@@ -158,12 +268,12 @@ std::vector<EcmSensorEntry> EcmSensorExtractor::extract(
       }
 
       // Pre-compute the Gazebo standard topic prefix for this sensor.
-      if (!worldName.empty() && !e.modelName.empty() && !e.sensorName.empty())
+      if (!snapshot.worldName.empty() && !e.modelName.empty() && !e.sensorName.empty())
       {
         if (!e.linkName.empty())
         {
           e.fallbackGazeboTopicPrefix =
-              "/world/" + worldName +
+              "/world/" + snapshot.worldName +
               "/model/" + e.modelName +
               "/link/"  + e.linkName  +
               "/sensor/" + e.sensorName;
@@ -171,7 +281,7 @@ std::vector<EcmSensorEntry> EcmSensorExtractor::extract(
         else
         {
           e.fallbackGazeboTopicPrefix =
-              "/world/" + worldName +
+              "/world/" + snapshot.worldName +
               "/model/" + e.modelName +
               "/sensor/" + e.sensorName;
         }
@@ -191,27 +301,39 @@ std::vector<EcmSensorEntry> EcmSensorExtractor::extract(
               << ",ParentEntity,Name\n";
       }
 
-      result.push_back(std::move(e));
+      sensors.push_back(std::move(e));
       return true;
     });
 
-  return result;
-}
+  for (const auto &sensor : sensors)
+  {
+    const auto modelIt = modelsByEntity.find(sensor.modelEntity);
+    if (modelIt != modelsByEntity.end())
+      modelIt->second.sensors.push_back(sensor);
+  }
 
-// ---------------------------------------------------------------------------
+  for (auto &entry : modelsByEntity)
+  {
+    auto &model = entry.second;
+    std::sort(model.links.begin(), model.links.end(),
+        [](const EcmLinkEntry &lhs, const EcmLinkEntry &rhs)
+        {
+          if (lhs.linkName != rhs.linkName)
+            return lhs.linkName < rhs.linkName;
+          return lhs.linkEntity < rhs.linkEntity;
+        });
+    std::sort(model.sensors.begin(), model.sensors.end(),
+        [](const EcmSensorEntry &lhs, const EcmSensorEntry &rhs)
+        {
+          if (lhs.sensorName != rhs.sensorName)
+            return lhs.sensorName < rhs.sensorName;
+          return lhs.sensorEntity < rhs.sensorEntity;
+        });
+  }
 
-size_t EcmSensorExtractor::countModels(
-    const gz::sim::EntityComponentManager &ecm)
-{
-  size_t count = 0;
-  ecm.Each<gz::sim::components::Model>(
-    [&](const gz::sim::Entity &,
-        const gz::sim::components::Model *) -> bool
-    {
-      ++count;
-      return true;
-    });
-  return count;
+  snapshot.sensors = sensors;
+  snapshot.models = valuesSortedByName(std::move(modelsByEntity));
+  return snapshot;
 }
 
 }  // namespace gz_ros2_bridge_manager

@@ -37,10 +37,6 @@ Rectangle {
     expandedModels = m
   }
 
-  function isWeakMatch(src) {
-    return src === "Name match" || src === "Type fallback"
-  }
-
   function typeMappingLabel(gzType, ros2Type) {
     var gz = gzType && gzType.length > 0 ? gzType.replace("gz.msgs.", "") : ""
     if (gz && ros2Type) return gz + " → " + ros2Type
@@ -50,9 +46,6 @@ Rectangle {
   function matchSourceLabel(src) {
     if (src === "ECM exact")     return "ECM SensorTopic"
     if (src === "ECM prefix")    return "ECM SensorTopic"
-    if (src === "ECM path")      return "Gazebo standard prefix"
-    if (src === "Name match")    return "Name match"
-    if (src === "Type fallback") return "Type-compatible fallback"
     if (src === "Unresolved")    return "Unresolved"
     return src
   }
@@ -60,9 +53,6 @@ Rectangle {
   function matchSourceColor(src) {
     if (src === "ECM exact")     return "#0d47a1"
     if (src === "ECM prefix")    return "#1565c0"
-    if (src === "ECM path")      return "#1976d2"
-    if (src === "Name match")    return "#e65100"
-    if (src === "Type fallback") return "#f57c00"
     if (src === "Unresolved")    return "#bf360c"
     return "#757575"
   }
@@ -449,11 +439,6 @@ Rectangle {
                     text: "inferred type: " + sensorDel.sensorD.inferredGzType
                     font.pixelSize: 8; font.family: "monospace"; color: "#424242"
                     Layout.fillWidth: true; elide: Text.ElideMiddle
-                  }
-                  Label {
-                    visible: root.isWeakMatch(sensorDel.sensorD.matchSource)
-                    text: "match detail: " + root.matchSourceLabel(sensorDel.sensorD.matchSource)
-                    font.pixelSize: 8; font.italic: true; color: "#e65100"
                   }
                   Label {
                     visible: sensorDel.sensorD.declaredTopic.length > 0

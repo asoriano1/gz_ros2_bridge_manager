@@ -17,9 +17,10 @@
 #include "gz_ros2_bridge_manager/BridgeTopicCandidate.hh"
 #include "gz_ros2_bridge_manager/BridgeProcessManager.hh"
 #include "gz_ros2_bridge_manager/BridgeTypeMapper.hh"
-#include "gz_ros2_bridge_manager/EcmSensorDiscovery.hh"
+#include "gz_ros2_bridge_manager/EcmDiscovery.hh"
 #include "gz_ros2_bridge_manager/GazeboTopicDiscovery.hh"
 #include "gz_ros2_bridge_manager/ModelTopicSelectionStore.hh"
+#include "gz_ros2_bridge_manager/TopicAssociation.hh"
 
 namespace gz_ros2_bridge_manager
 {
@@ -131,15 +132,14 @@ private:
                               const std::vector<BridgeTopicCandidate> &cands);
 
   // ---- ECM snapshot (written by Update() thread, read by main thread) ----
-  // All accesses to ecmSensors_ / ecmFingerprint_ must hold ecmMutex_.
+  // All accesses to ecmSnapshot_ / ecmFingerprint_ must hold ecmMutex_.
   std::mutex ecmMutex_;
-  std::vector<EcmSensorEntry> ecmSensors_;
+  EcmWorldSnapshot ecmSnapshot_;
   size_t ecmFingerprint_{0};
   std::atomic<bool> ecmUpdatePending_{false};
 
-  // ---- Discovery snapshot (set on main thread after worker finishes) ----
+  // ---- Runtime discovery snapshot (set on main thread after worker finishes) ----
   std::vector<GzTopicEntry> discoveredTopics_;
-  std::vector<std::string>  discoveredModels_;
 
   // ---- World state ----
   QString worldName_;

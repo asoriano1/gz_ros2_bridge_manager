@@ -11,7 +11,7 @@
 #include <gz/sim/components/Sensor.hh>
 #include <gz/sim/components/World.hh>
 
-#include "gz_ros2_bridge_manager/EcmSensorExtractor.hh"
+#include "gz_ros2_bridge_manager/EcmDiscovery.hh"
 
 using namespace gz_ros2_bridge_manager;
 
@@ -48,7 +48,7 @@ TestHierarchy makeWorldModelLink(gz::sim::EntityComponentManager &ecm)
 
 }  // namespace
 
-TEST(EcmSensorExtractor, SensorUnderLinkUsesSensorTopicAndOwningModel)
+TEST(EcmDiscovery, SensorUnderLinkUsesSensorTopicAndOwningModel)
 {
   gz::sim::EntityComponentManager ecm;
   const auto h = makeWorldModelLink(ecm);
@@ -60,16 +60,19 @@ TEST(EcmSensorExtractor, SensorUnderLinkUsesSensorTopicAndOwningModel)
   ecm.CreateComponent(sensor, gz::sim::components::ParentEntity(h.link));
   ecm.CreateComponent(sensor, gz::sim::components::SensorTopic("/robot/front_camera"));
 
-  const auto sensors = EcmSensorExtractor::extract(ecm);
-  ASSERT_EQ(sensors.size(), 1u);
-  EXPECT_EQ(sensors[0].declaredTopic, "/robot/front_camera");
-  EXPECT_EQ(sensors[0].sensorType, "camera");
-  EXPECT_EQ(sensors[0].modelName, "robot");
-  EXPECT_EQ(sensors[0].linkName, "camera_link");
-  EXPECT_EQ(sensors[0].sensorName, "front_camera");
+  const auto snapshot = EcmDiscovery::extract(ecm);
+  ASSERT_EQ(snapshot.models.size(), 1u);
+  ASSERT_EQ(snapshot.sensors.size(), 1u);
+  EXPECT_EQ(snapshot.sensors[0].declaredTopic, "/robot/front_camera");
+  EXPECT_EQ(snapshot.sensors[0].sensorType, "camera");
+  EXPECT_EQ(snapshot.sensors[0].modelName, "robot");
+  EXPECT_EQ(snapshot.sensors[0].linkName, "camera_link");
+  EXPECT_EQ(snapshot.sensors[0].sensorName, "front_camera");
+  ASSERT_EQ(snapshot.models[0].links.size(), 1u);
+  EXPECT_EQ(snapshot.models[0].links[0].linkName, "camera_link");
 }
 
-TEST(EcmSensorExtractor, SensorDirectlyUnderModelUsesSensorTopicAndOwningModel)
+TEST(EcmDiscovery, SensorDirectlyUnderModelUsesSensorTopicAndOwningModel)
 {
   gz::sim::EntityComponentManager ecm;
   const auto h = makeWorldModelLink(ecm);
@@ -81,16 +84,16 @@ TEST(EcmSensorExtractor, SensorDirectlyUnderModelUsesSensorTopicAndOwningModel)
   ecm.CreateComponent(sensor, gz::sim::components::ParentEntity(h.model));
   ecm.CreateComponent(sensor, gz::sim::components::SensorTopic("/robot/imu/data_raw"));
 
-  const auto sensors = EcmSensorExtractor::extract(ecm);
-  ASSERT_EQ(sensors.size(), 1u);
-  EXPECT_EQ(sensors[0].declaredTopic, "/robot/imu/data_raw");
-  EXPECT_EQ(sensors[0].sensorType, "imu");
-  EXPECT_EQ(sensors[0].modelName, "robot");
-  EXPECT_TRUE(sensors[0].linkName.empty());
-  EXPECT_EQ(sensors[0].sensorName, "imu_sensor");
+  const auto snapshot = EcmDiscovery::extract(ecm);
+  ASSERT_EQ(snapshot.sensors.size(), 1u);
+  EXPECT_EQ(snapshot.sensors[0].declaredTopic, "/robot/imu/data_raw");
+  EXPECT_EQ(snapshot.sensors[0].sensorType, "imu");
+  EXPECT_EQ(snapshot.sensors[0].modelName, "robot");
+  EXPECT_TRUE(snapshot.sensors[0].linkName.empty());
+  EXPECT_EQ(snapshot.sensors[0].sensorName, "imu_sensor");
 }
 
-TEST(EcmSensorExtractor, ExtractsAllSensorEntitiesAcrossSupportedParentPatterns)
+TEST(EcmDiscovery, ExtractsAllSensorEntitiesAcrossSupportedParentPatterns)
 {
   gz::sim::EntityComponentManager ecm;
   const auto h = makeWorldModelLink(ecm);
@@ -116,8 +119,11 @@ TEST(EcmSensorExtractor, ExtractsAllSensorEntitiesAcrossSupportedParentPatterns)
   ecm.CreateComponent(lidar, gz::sim::components::ParentEntity(h.model));
   ecm.CreateComponent(lidar, gz::sim::components::SensorTopic("/robot/lidar/scan"));
 
-  const auto sensors = EcmSensorExtractor::extract(ecm);
+  const auto snapshot = EcmDiscovery::extract(ecm);
+  const auto &sensors = snapshot.sensors;
   ASSERT_EQ(sensors.size(), 3u);
+  ASSERT_EQ(snapshot.models.size(), 1u);
+  ASSERT_EQ(snapshot.models[0].sensors.size(), 3u);
 
   size_t directModelSensors = 0;
   size_t linkSensors = 0;

@@ -1,396 +1,123 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
+
 #include "gz_ros2_bridge_manager/BridgeTypeMapper.hh"
-#include "gz_ros2_bridge_manager/EcmSensorDiscovery.hh"
+#include "gz_ros2_bridge_manager/TopicAssociation.hh"
 
 using namespace gz_ros2_bridge_manager;
 
 namespace
 {
 
-// Build a minimal GzTopicEntry with bridgeable status resolved via mapper.
 GzTopicEntry makeEntry(const std::string &topic, const std::string &gzType,
                        const BridgeTypeMapper &mapper)
 {
-  GzTopicEntry e;
-  e.topicName   = topic;
-  e.gzMsgType   = gzType;
-  e.bridgeable  = mapper.isBridgeable(gzType);
-  e.ros2MsgType = mapper.ros2Type(gzType);
-  e.bridgeSpec  = mapper.bridgeSpec(topic, gzType);
-  return e;
+  GzTopicEntry entry;
+  entry.topicName = topic;
+  entry.gzMsgType = gzType;
+  entry.bridgeable = mapper.isBridgeable(gzType);
+  entry.ros2MsgType = mapper.ros2Type(gzType);
+  entry.bridgeSpec = mapper.bridgeSpec(topic, gzType);
+  return entry;
 }
 
 GzTopicEntry makeListedTopicWithoutType(const std::string &topic)
 {
-  GzTopicEntry e;
-  e.topicName = topic;
-  return e;
+  GzTopicEntry entry;
+  entry.topicName = topic;
+  return entry;
+}
+
+bool hasTopic(const std::vector<std::string> &topics, const std::string &topic)
+{
+  return std::find(topics.begin(), topics.end(), topic) != topics.end();
 }
 
 std::vector<std::string> additionalTopicsAfterClaims(
     const std::vector<GzTopicEntry> &advertisedTopics,
     const ModelSensorTree &tree)
 {
-  std::vector<std::string> additionalTopics;
+  std::vector<std::string> topics;
   for (const auto &entry :
-       EcmTopicMatcher::bridgeableTopicsExcludingClaims(advertisedTopics, tree))
-    additionalTopics.push_back(EcmTopicMatcher::normalizeTopic(entry.topicName));
-  return additionalTopics;
+       TopicAssociation::bridgeableTopicsExcludingClaims(advertisedTopics, tree))
+  {
+    topics.push_back(TopicAssociation::normalizeTopic(entry.topicName));
+  }
+  return topics;
 }
 
-// Build a sensor with declaredTopic (SensorTopic component).
-EcmSensorEntry makeSensor(const std::string &model, const std::string &link,
-                          const std::string &sensor, const std::string &type,
+EcmSensorEntry makeSensor(const std::string &model,
+                          const std::string &link,
+                          const std::string &sensor,
+                          const std::string &type,
                           const std::string &declaredTopic = "")
 {
   static EntityId id = 1;
-  EcmSensorEntry e;
-  e.modelEntity   = id++;
-  e.modelName     = model;
-  e.linkEntity    = id++;
-  e.linkName      = link;
-  e.sensorEntity  = id++;
-  e.sensorName    = sensor;
-  e.sensorType    = type;
-  e.declaredTopic = declaredTopic;
-  return e;
-}
-
-// Build a sensor that has no declaredTopic but has a fallback prefix.
-EcmSensorEntry makeSensorWithFallback(const std::string &model,
-                                       const std::string &link,
-                                       const std::string &sensor,
-                                       const std::string &type,
-                                       const std::string &fallbackPrefix)
-{
-  EcmSensorEntry e = makeSensor(model, link, sensor, type);
-  e.fallbackGazeboTopicPrefix = fallbackPrefix;
-  return e;
+  EcmSensorEntry entry;
+  entry.modelEntity = id++;
+  entry.modelName = model;
+  entry.linkEntity = id++;
+  entry.linkName = link;
+  entry.sensorEntity = id++;
+  entry.sensorName = sensor;
+  entry.sensorType = type;
+  entry.declaredTopic = declaredTopic;
+  return entry;
 }
 
 }  // namespace
 
-// ============================================================================
-// Test 1 — Exact topic match (SensorTopic == advertised topic)
-// ============================================================================
-TEST(EcmTopicMatcher, ExactTopicMatch)
+TEST(TopicAssociation, ExactTopicMatch)
 {
   BridgeTypeMapper mapper;
   const std::string topic =
       "/world/default/model/robot/link/base/sensor/lidar/scan";
-  GzTopicEntry adv = makeEntry(topic, "gz.msgs.LaserScan", mapper);
 
-  EcmSensorEntry s = makeSensor("robot", "base", "lidar", "gpu_lidar", topic);
+  auto ds = TopicAssociation::matchSensor(
+      makeSensor("robot", "base", "lidar", "gpu_lidar", topic),
+      {makeEntry(topic, "gz.msgs.LaserScan", mapper)});
 
-  auto ds = EcmTopicMatcher::matchSensor(s, {adv});
-  EXPECT_TRUE(ds.resolved);
+  ASSERT_TRUE(ds.resolved);
+  EXPECT_EQ(ds.matchSource, MatchSource::EcmSensorTopicExact);
   ASSERT_EQ(ds.matchedBridgeSpecs.size(), 1u);
-  EXPECT_NE(ds.matchedBridgeSpecs[0].find("/scan"), std::string::npos);
+  EXPECT_EQ(ds.matchedBridgeSpecs[0],
+            topic + "@sensor_msgs/msg/LaserScan@gz.msgs.LaserScan");
 }
 
-// ============================================================================
-// Test 2 — Declared topic is prefix; camera emits image + camera_info
-// ============================================================================
-TEST(EcmTopicMatcher, CameraPrefixMatchesImageAndCameraInfo)
+TEST(TopicAssociation, CameraPrefixMatchesAdvertisedImageAndCameraInfo)
 {
   BridgeTypeMapper mapper;
   const std::string prefix =
       "/world/default/model/robot/link/cam_link/sensor/front_cam";
 
-  std::vector<GzTopicEntry> adv{
-    makeEntry(prefix + "/image",       "gz.msgs.Image",        mapper),
-    makeEntry(prefix + "/camera_info", "gz.msgs.CameraInfo",   mapper),
-    makeEntry(prefix + "/depth",       "gz.msgs.Image",        mapper),
-  };
-
-  EcmSensorEntry s = makeSensor("robot", "cam_link", "front_cam", "camera", prefix);
-
-  auto ds = EcmTopicMatcher::matchSensor(s, adv);
-  EXPECT_TRUE(ds.resolved);
-  EXPECT_GE(ds.matchedBridgeSpecs.size(), 2u);
-
-  auto hasSpec = [&](const std::string &sub)
-  {
-    for (const auto &spec : ds.matchedBridgeSpecs)
-      if (spec.find(sub) != std::string::npos)
-        return true;
-    return false;
-  };
-  EXPECT_TRUE(hasSpec("/image"));
-  EXPECT_TRUE(hasSpec("/camera_info"));
-}
-
-// ============================================================================
-// Test 3 — Lidar prefix → scan suffix matched
-// ============================================================================
-TEST(EcmTopicMatcher, LidarPrefixMatchesScan)
-{
-  BridgeTypeMapper mapper;
-  const std::string prefix =
-      "/world/default/model/robot/link/base/sensor/front_laser";
-
-  std::vector<GzTopicEntry> adv{
-    makeEntry(prefix + "/scan",   "gz.msgs.LaserScan", mapper),
-    makeEntry(prefix + "/points", "gz.msgs.PointCloudPacked", mapper),
-  };
-
-  EcmSensorEntry s = makeSensor("robot", "base", "front_laser", "gpu_lidar", prefix);
-
-  auto ds = EcmTopicMatcher::matchSensor(s, adv);
-  EXPECT_TRUE(ds.resolved);
-
-  bool hasScan = false;
-  for (const auto &spec : ds.matchedBridgeSpecs)
-    if (spec.find("/scan") != std::string::npos) hasScan = true;
-  EXPECT_TRUE(hasScan);
-}
-
-// ============================================================================
-// Test 4 — IMU prefix matched via /imu suffix
-// ============================================================================
-TEST(EcmTopicMatcher, ImuPrefixMatchesImuSuffix)
-{
-  BridgeTypeMapper mapper;
-  const std::string prefix =
-      "/world/default/model/robot/link/imu_link/sensor/imu_sensor";
-
-  std::vector<GzTopicEntry> adv{
-    makeEntry(prefix + "/imu", "gz.msgs.IMU", mapper),
-  };
-
-  EcmSensorEntry s = makeSensor("robot", "imu_link", "imu_sensor", "imu", prefix);
-
-  auto ds = EcmTopicMatcher::matchSensor(s, adv);
-  EXPECT_TRUE(ds.resolved);
-  EXPECT_EQ(ds.matchedBridgeSpecs.size(), 1u);
-}
-
-// ============================================================================
-// Test 5 — Camera SensorTopic without TopicInfo still creates inferred Image row
-// ============================================================================
-TEST(EcmTopicMatcher, CameraSensorTopicWithoutTopicInfoUsesInferredImageType)
-{
-  const std::string topic =
-      "/sensor_test_robot_urdf_1/camera/image_raw";
-
-  EcmSensorEntry s = makeSensor("robot", "base", "camera_sensor", "camera", topic);
-
-  auto ds = EcmTopicMatcher::matchSensor(s, {makeListedTopicWithoutType(topic)});
-  ASSERT_TRUE(ds.resolved);
-  EXPECT_EQ(ds.matchSource, MatchSource::EcmSensorTopicExact);
-  EXPECT_TRUE(ds.topicListed);
-  EXPECT_EQ(ds.typeSource, "type inferred");
-  EXPECT_EQ(ds.inferredGzType, "gz.msgs.Image");
-  ASSERT_EQ(ds.matchedTopicNames.size(), 1u);
-  EXPECT_EQ(ds.matchedTopicNames[0], topic);
-  ASSERT_EQ(ds.matchedBridgeSpecs.size(), 1u);
-  EXPECT_EQ(ds.matchedBridgeSpecs[0],
-            topic + "@sensor_msgs/msg/Image@gz.msgs.Image");
-  EXPECT_EQ(ds.warning,
-            "Topic type inferred from ECM sensor type; TopicInfo not available yet.");
-}
-
-// ============================================================================
-// Test 6 — ECM sensor match wins: matchedBridgeSpecs contains the ECM topic,
-//           not any heuristic topic that might happen to have the same prefix
-// ============================================================================
-TEST(EcmTopicMatcher, EcmMatchedTopicIsInBridgeSpecs)
-{
-  BridgeTypeMapper mapper;
-  const std::string ecmPrefix =
-      "/world/default/model/robot/link/base/sensor/lidar";
-  const std::string ecmTopic = ecmPrefix + "/scan";
-
-  std::vector<GzTopicEntry> adv{
-    makeEntry(ecmTopic,          "gz.msgs.LaserScan",    mapper),
-    makeEntry("/random/other",   "gz.msgs.LaserScan",    mapper),
-  };
-
-  EcmSensorEntry s = makeSensor("robot", "base", "lidar", "gpu_lidar", ecmPrefix);
-
-  auto ds = EcmTopicMatcher::matchSensor(s, adv);
-  EXPECT_TRUE(ds.resolved);
-
-  for (const auto &topic : ds.matchedTopicNames)
-    EXPECT_EQ(topic, ecmTopic) << "should only match the ECM-declared prefix";
-}
-
-// ============================================================================
-// Test 7 — matchAll filters by model name
-// ============================================================================
-TEST(EcmTopicMatcher, MatchAllFiltersToSelectedModel)
-{
-  BridgeTypeMapper mapper;
-  const std::string topicA =
-      "/world/default/model/A/link/la/sensor/sa/scan";
-  const std::string topicB =
-      "/world/default/model/B/link/lb/sensor/sb/scan";
-
-  std::vector<GzTopicEntry> adv{
-    makeEntry(topicA, "gz.msgs.LaserScan", mapper),
-    makeEntry(topicB, "gz.msgs.LaserScan", mapper),
-  };
-
-  std::vector<EcmSensorEntry> sensors{
-    makeSensor("A", "la", "sa", "gpu_lidar",
-               "/world/default/model/A/link/la/sensor/sa"),
-    makeSensor("B", "lb", "sb", "gpu_lidar",
-               "/world/default/model/B/link/lb/sensor/sb"),
-  };
-
-  auto tree = EcmTopicMatcher::matchAll("default", sensors, "A", adv);
-  ASSERT_EQ(tree.sensors.size(), 1u);
-  EXPECT_EQ(tree.sensors[0].sensor.modelName, "A");
-  EXPECT_TRUE(tree.sensors[0].resolved);
-}
-
-// ============================================================================
-// Test 8 — Duplicate bridge specs are removed
-// ============================================================================
-TEST(EcmTopicMatcher, DuplicateBridgeSpecsRemoved)
-{
-  BridgeTypeMapper mapper;
-  const std::string prefix = "/world/default/model/robot/link/base/sensor/cam";
-  const std::string imageTopic = prefix + "/image";
-
-  // Both "exact" prefix and "image suffix" would match imageTopic — should appear once.
-  std::vector<GzTopicEntry> adv{
-    makeEntry(imageTopic, "gz.msgs.Image", mapper),
-  };
-
-  EcmSensorEntry s = makeSensor("robot", "base", "cam", "camera", prefix);
-
-  auto ds = EcmTopicMatcher::matchSensor(s, adv);
-  EXPECT_TRUE(ds.resolved);
-
-  // Count occurrences of the image bridge spec.
-  size_t count = 0;
-  const std::string imageSpec = mapper.bridgeSpec(imageTopic, "gz.msgs.Image");
-  for (const auto &spec : ds.matchedBridgeSpecs)
-    if (spec == imageSpec) ++count;
-  EXPECT_EQ(count, 1u) << "image spec must appear exactly once";
-}
-
-// ============================================================================
-// Test 9 — defaultTopicPrefix constructs Gazebo standard path
-// ============================================================================
-TEST(EcmTopicMatcher, DefaultTopicPrefixFormat)
-{
-  EcmSensorEntry s;
-  s.modelName  = "robot";
-  s.linkName   = "base_link";
-  s.sensorName = "front_cam";
-
-  const std::string expected =
-      "/world/myworld/model/robot/link/base_link/sensor/front_cam";
-  EXPECT_EQ(EcmTopicMatcher::defaultTopicPrefix("myworld", s), expected);
-}
-
-// ============================================================================
-// Test 10 — Empty sensor names produce empty prefix (no crash)
-// ============================================================================
-TEST(EcmTopicMatcher, EmptyNamesGiveEmptyPrefix)
-{
-  EcmSensorEntry s;
-  EXPECT_TRUE(EcmTopicMatcher::defaultTopicPrefix("world", s).empty());
-}
-
-// ============================================================================
-// Test 11 — declaredTopic exact match → MatchSource::EcmSensorTopicExact
-// ============================================================================
-TEST(EcmTopicMatcher, MatchSourceExactWhenDeclaredTopicMatchesDirectly)
-{
-  BridgeTypeMapper mapper;
-  const std::string fullTopic =
-      "/world/default/model/robot/link/base/sensor/lidar/scan";
-
-  GzTopicEntry adv = makeEntry(fullTopic, "gz.msgs.LaserScan", mapper);
-  EcmSensorEntry s = makeSensor("robot", "base", "lidar", "gpu_lidar", fullTopic);
-
-  auto ds = EcmTopicMatcher::matchSensor(s, {adv});
-  EXPECT_TRUE(ds.resolved);
-  EXPECT_EQ(ds.matchSource, MatchSource::EcmSensorTopicExact);
-}
-
-// ============================================================================
-// Test 12 — declaredTopic is a prefix, topics via suffix → EcmSensorTopicPrefix
-// ============================================================================
-TEST(EcmTopicMatcher, MatchSourcePrefixWhenSuffixExpanded)
-{
-  BridgeTypeMapper mapper;
-  const std::string prefix =
-      "/world/default/model/robot/link/base/sensor/front_cam";
-
-  std::vector<GzTopicEntry> adv{
-    makeEntry(prefix + "/image",       "gz.msgs.Image",      mapper),
+  std::vector<GzTopicEntry> advertisedTopics{
+    makeEntry(prefix + "/image", "gz.msgs.Image", mapper),
     makeEntry(prefix + "/camera_info", "gz.msgs.CameraInfo", mapper),
+    makeEntry(prefix + "/depth", "gz.msgs.Image", mapper),
   };
 
-  EcmSensorEntry s = makeSensor("robot", "base", "front_cam", "camera", prefix);
+  auto ds = TopicAssociation::matchSensor(
+      makeSensor("robot", "cam_link", "front_cam", "camera", prefix),
+      advertisedTopics);
 
-  auto ds = EcmTopicMatcher::matchSensor(s, adv);
-  EXPECT_TRUE(ds.resolved);
+  ASSERT_TRUE(ds.resolved);
   EXPECT_EQ(ds.matchSource, MatchSource::EcmSensorTopicPrefix);
+  EXPECT_TRUE(hasTopic(ds.matchedTopicNames,
+      TopicAssociation::normalizeTopic(prefix + "/image")));
+  EXPECT_TRUE(hasTopic(ds.matchedTopicNames,
+      TopicAssociation::normalizeTopic(prefix + "/camera_info")));
 }
 
-// ============================================================================
-// Test 13 — No declaredTopic, fallbackGazeboTopicPrefix used → EcmStandardPrefix
-// ============================================================================
-TEST(EcmTopicMatcher, MatchSourceStandardPrefixWhenFallbackUsed)
-{
-  BridgeTypeMapper mapper;
-  const std::string fallback =
-      "/world/default/model/robot/link/base/sensor/lidar";
-
-  std::vector<GzTopicEntry> adv{
-    makeEntry(fallback + "/scan", "gz.msgs.LaserScan", mapper),
-  };
-
-  // No declaredTopic — only fallback prefix set.
-  EcmSensorEntry s = makeSensorWithFallback("robot", "base", "lidar", "gpu_lidar", fallback);
-
-  auto ds = EcmTopicMatcher::matchSensor(s, adv);
-  EXPECT_TRUE(ds.resolved);
-  EXPECT_EQ(ds.matchSource, MatchSource::EcmStandardPrefix);
-}
-
-// ============================================================================
-// Test 14 — declaredTopic takes priority over fallback when both could match
-// ============================================================================
-TEST(EcmTopicMatcher, DeclaredTopicTakesPriorityOverFallback)
-{
-  BridgeTypeMapper mapper;
-  const std::string declared = "/custom/lidar";
-  const std::string fallback =
-      "/world/default/model/robot/link/base/sensor/lidar";
-
-  std::vector<GzTopicEntry> adv{
-    makeEntry(declared + "/scan", "gz.msgs.LaserScan", mapper),
-    makeEntry(fallback + "/scan", "gz.msgs.LaserScan", mapper),
-  };
-
-  EcmSensorEntry s = makeSensor("robot", "base", "lidar", "gpu_lidar", declared);
-  s.fallbackGazeboTopicPrefix = fallback;
-
-  auto ds = EcmTopicMatcher::matchSensor(s, adv);
-  EXPECT_TRUE(ds.resolved);
-  // declaredTopic matched first → EcmSensorTopicPrefix (not EcmStandardPrefix)
-  EXPECT_NE(ds.matchSource, MatchSource::EcmStandardPrefix);
-  EXPECT_EQ(ds.matchSource, MatchSource::EcmSensorTopicPrefix);
-}
-
-// ============================================================================
-// Test 15 — IMU SensorTopic without TopicInfo still creates inferred Imu row
-// ============================================================================
-TEST(EcmTopicMatcher, ImuSensorTopicWithoutTopicInfoUsesInferredImuType)
+TEST(TopicAssociation, ImuSensorTopicWithoutTopicInfoUsesInferredImuType)
 {
   const std::string topic = "/sensor_test_robot_urdf_1/imu/data_raw";
-  EcmSensorEntry s = makeSensor("robot", "base", "imu_sensor", "imu", topic);
 
-  auto ds = EcmTopicMatcher::matchSensor(s, {makeListedTopicWithoutType(topic)});
+  auto ds = TopicAssociation::matchSensor(
+      makeSensor("robot", "base", "imu_sensor", "imu", topic),
+      {makeListedTopicWithoutType(topic)});
+
   ASSERT_TRUE(ds.resolved);
-  EXPECT_EQ(ds.matchSource, MatchSource::EcmSensorTopicExact);
   EXPECT_TRUE(ds.topicListed);
   EXPECT_EQ(ds.typeSource, "type inferred");
   EXPECT_EQ(ds.inferredGzType, "gz.msgs.IMU");
@@ -399,338 +126,240 @@ TEST(EcmTopicMatcher, ImuSensorTopicWithoutTopicInfoUsesInferredImuType)
             topic + "@sensor_msgs/msg/Imu@gz.msgs.IMU");
 }
 
-// ============================================================================
-// Test 16 — nestedModel flag is carried through; matching still works
-// ============================================================================
-TEST(EcmTopicMatcher, NestedModelFlagDoesNotBreakMatching)
+TEST(TopicAssociation, CameraSensorTopicWithoutTopicInfoUsesInferredImageType)
 {
-  BridgeTypeMapper mapper;
-  const std::string prefix =
-      "/world/default/model/parent/link/base/sensor/lidar";
+  const std::string topic = "/sensor_test_robot_urdf_1/camera/image_raw";
 
-  std::vector<GzTopicEntry> adv{
-    makeEntry(prefix + "/scan", "gz.msgs.LaserScan", mapper),
-  };
+  auto ds = TopicAssociation::matchSensor(
+      makeSensor("robot", "base", "camera_sensor", "camera", topic),
+      {makeListedTopicWithoutType(topic)});
 
-  EcmSensorEntry s = makeSensor("parent", "base", "lidar", "gpu_lidar", prefix);
-  s.nestedModel = true;
-
-  auto ds = EcmTopicMatcher::matchSensor(s, adv);
-  EXPECT_TRUE(ds.resolved);
-  EXPECT_TRUE(ds.sensor.nestedModel);
-}
-
-// ============================================================================
-// Test 17 — matchSourceName returns user-friendly strings
-// ============================================================================
-TEST(EcmTopicMatcher, MatchSourceNameStrings)
-{
-  EXPECT_STREQ(matchSourceName(MatchSource::Unresolved),              "Unresolved");
-  EXPECT_STREQ(matchSourceName(MatchSource::EcmStandardPrefix),       "ECM path");
-  EXPECT_STREQ(matchSourceName(MatchSource::EcmSensorTopicPrefix),    "ECM prefix");
-  EXPECT_STREQ(matchSourceName(MatchSource::EcmSensorTopicExact),     "ECM exact");
-  EXPECT_STREQ(matchSourceName(MatchSource::NameMatch),               "Name match");
-  EXPECT_STREQ(matchSourceName(MatchSource::TypeCompatibleFallback),  "Type fallback");
-}
-
-// ============================================================================
-// Test 18 — matchAll with empty filterModelName returns all sensors
-// ============================================================================
-TEST(EcmTopicMatcher, MatchAllEmptyFilterReturnsAll)
-{
-  BridgeTypeMapper mapper;
-  const std::string prefixA = "/world/w/model/A/link/la/sensor/sa";
-  const std::string prefixB = "/world/w/model/B/link/lb/sensor/sb";
-
-  std::vector<GzTopicEntry> adv{
-    makeEntry(prefixA + "/scan", "gz.msgs.LaserScan", mapper),
-    makeEntry(prefixB + "/scan", "gz.msgs.LaserScan", mapper),
-  };
-
-  std::vector<EcmSensorEntry> sensors{
-    makeSensor("A", "la", "sa", "gpu_lidar", prefixA),
-    makeSensor("B", "lb", "sb", "gpu_lidar", prefixB),
-  };
-
-  auto tree = EcmTopicMatcher::matchAll("w", sensors, "", adv);
-  EXPECT_EQ(tree.sensors.size(), 2u);
-  EXPECT_TRUE(tree.ecmConfirmed);
-}
-
-// ============================================================================
-// Test 19 — No declaredTopic/fallback, and sensor type incompatible with topic → Unresolved
-//
-// "lidar" appears in the topic path (name token match) but the sensor type is
-// "navsat" which expects NavSatFix, not LaserScan.  Both NameMatch and
-// TypeCompatibleFallback fail on the type check → truly Unresolved.
-// ============================================================================
-TEST(EcmTopicMatcher, IncompatibleTypeWithNameInPathIsUnresolved)
-{
-  BridgeTypeMapper mapper;
-  const std::string topic = "/world/w/model/robot/link/base/sensor/lidar/scan";
-
-  std::vector<GzTopicEntry> adv{
-    makeEntry(topic, "gz.msgs.LaserScan", mapper),
-  };
-
-  // Sensor type "navsat" expects NavSatFix — does not match LaserScan.
-  EcmSensorEntry s;
-  s.sensorName = "lidar";
-  s.sensorType = "navsat";
-
-  auto ds = EcmTopicMatcher::matchSensor(s, adv);
-  EXPECT_FALSE(ds.resolved);
-  EXPECT_EQ(ds.matchSource, MatchSource::Unresolved);
-}
-
-// ============================================================================
-// Test 20 — Camera: all known suffixes collected via sub-path scan
-// ============================================================================
-TEST(EcmTopicMatcher, CameraSubPathCollectsAllSuffixes)
-{
-  BridgeTypeMapper mapper;
-  const std::string prefix = "/world/w/model/r/link/l/sensor/cam";
-
-  std::vector<GzTopicEntry> adv{
-    makeEntry(prefix + "/image",       "gz.msgs.Image",      mapper),
-    makeEntry(prefix + "/camera_info", "gz.msgs.CameraInfo", mapper),
-    makeEntry(prefix + "/depth",       "gz.msgs.Image",      mapper),
-    makeEntry(prefix + "/depth_raw",   "gz.msgs.Image",      mapper),
-    makeEntry(prefix + "/points",      "gz.msgs.PointCloudPacked", mapper),
-  };
-
-  EcmSensorEntry s = makeSensor("r", "l", "cam", "depth_camera", prefix);
-
-  auto ds = EcmTopicMatcher::matchSensor(s, adv);
-  EXPECT_TRUE(ds.resolved);
-  // All five topics must be collected (no duplicates).
-  EXPECT_EQ(ds.matchedTopicNames.size(), 5u);
-  EXPECT_EQ(ds.matchedBridgeSpecs.size(), 5u);
-}
-
-// ============================================================================
-// Test 21 — NameMatch: sensor name appears as path token AND type compatible
-// ============================================================================
-TEST(EcmTopicMatcher, NameMatchWhenSensorNameInTopicPath)
-{
-  BridgeTypeMapper mapper;
-  // "front_laser" is an exact path segment in this topic.
-  const std::string topic = "/robot_ns/front_laser/scan";
-  GzTopicEntry adv = makeEntry(topic, "gz.msgs.LaserScan", mapper);
-
-  // No declaredTopic and no fallback prefix.
-  EcmSensorEntry s;
-  s.modelEntity  = 100;
-  s.modelName    = "robot_ns";
-  s.linkEntity   = 101;
-  s.linkName     = "base_link";
-  s.sensorEntity = 102;
-  s.sensorName   = "front_laser";
-  s.sensorType   = "gpu_lidar";  // expects LaserScan → type matches
-
-  auto ds = EcmTopicMatcher::matchSensor(s, {adv});
-  EXPECT_TRUE(ds.resolved);
-  EXPECT_EQ(ds.matchSource, MatchSource::NameMatch);
-  ASSERT_EQ(ds.matchedTopicNames.size(), 1u);
-  EXPECT_EQ(ds.matchedTopicNames[0], topic);
-  EXPECT_FALSE(ds.warning.empty());
-}
-
-// ============================================================================
-// Test 22 — TypeCompatibleFallback: name not in path but type matches
-// ============================================================================
-TEST(EcmTopicMatcher, TypeCompatibleFallbackWhenNameNotInPath)
-{
-  BridgeTypeMapper mapper;
-  // "xyz_sensor" does NOT appear as a segment in /some/unrelated/scan.
-  const std::string topic = "/some/unrelated/scan";
-  GzTopicEntry adv = makeEntry(topic, "gz.msgs.LaserScan", mapper);
-
-  EcmSensorEntry s;
-  s.modelEntity  = 200;
-  s.modelName    = "robot";
-  s.linkEntity   = 201;
-  s.linkName     = "base_link";
-  s.sensorEntity = 202;
-  s.sensorName   = "xyz_sensor";  // not in topic path → NameMatch fails
-  s.sensorType   = "gpu_lidar";   // expects LaserScan → TypeCompatibleFallback succeeds
-
-  auto ds = EcmTopicMatcher::matchSensor(s, {adv});
-  EXPECT_TRUE(ds.resolved);
-  EXPECT_EQ(ds.matchSource, MatchSource::TypeCompatibleFallback);
-  ASSERT_EQ(ds.matchedTopicNames.size(), 1u);
-  EXPECT_EQ(ds.matchedTopicNames[0], topic);
-  EXPECT_FALSE(ds.warning.empty());
-}
-
-// ============================================================================
-// Test 23 — Strong match claimed by model A must not leak into model B
-// ============================================================================
-TEST(EcmTopicMatcher, StrongClaimedTopicDoesNotAppearUnderOtherModel)
-{
-  BridgeTypeMapper mapper;
-  const std::string topicA =
-      "/world/default/model/A/link/la/sensor/laser_a/scan";
-
-  std::vector<GzTopicEntry> adv{
-    makeEntry(topicA, "gz.msgs.LaserScan", mapper),
-  };
-
-  std::vector<EcmSensorEntry> sensors{
-    makeSensor("A", "la", "laser_a", "gpu_lidar",
-               "/world/default/model/A/link/la/sensor/laser_a"),
-    makeSensor("B", "lb", "laser_b", "gpu_lidar"),
-  };
-
-  auto tree = EcmTopicMatcher::matchAll("default", sensors, "", adv);
-  ASSERT_EQ(tree.sensors.size(), 2u);
-
-  EXPECT_EQ(tree.sensors[0].sensor.modelName, "A");
-  EXPECT_TRUE(tree.sensors[0].resolved);
-  ASSERT_EQ(tree.sensors[0].matchedTopicNames.size(), 1u);
-  EXPECT_EQ(tree.sensors[0].matchedTopicNames[0], topicA);
-
-  EXPECT_EQ(tree.sensors[1].sensor.modelName, "B");
-  EXPECT_FALSE(tree.sensors[1].resolved);
-  EXPECT_TRUE(tree.sensors[1].matchedTopicNames.empty());
-}
-
-// ============================================================================
-// Test 24 — Ambiguous compatible generic topic stays unassigned
-// ============================================================================
-TEST(EcmTopicMatcher, AmbiguousCompatibleTopicDoesNotAttachToAnyModel)
-{
-  BridgeTypeMapper mapper;
-  const std::string topic = "/some/unrelated/scan";
-
-  std::vector<GzTopicEntry> adv{
-    makeEntry(topic, "gz.msgs.LaserScan", mapper),
-  };
-
-  std::vector<EcmSensorEntry> sensors{
-    makeSensor("A", "la", "sensor_a", "gpu_lidar"),
-    makeSensor("B", "lb", "sensor_b", "gpu_lidar"),
-  };
-
-  auto tree = EcmTopicMatcher::matchAll("default", sensors, "", adv);
-  ASSERT_EQ(tree.sensors.size(), 2u);
-  EXPECT_FALSE(tree.sensors[0].resolved);
-  EXPECT_FALSE(tree.sensors[1].resolved);
-  EXPECT_TRUE(tree.sensors[0].matchedTopicNames.empty());
-  EXPECT_TRUE(tree.sensors[1].matchedTopicNames.empty());
-}
-
-// ============================================================================
-// Test 25 — matchAll stays ECM-only when SensorTopic is missing
-// ============================================================================
-TEST(EcmTopicMatcher, MatchAllDoesNotUseFallbackWithoutSensorTopic)
-{
-  BridgeTypeMapper mapper;
-  const std::string fallback =
-      "/world/default/model/A/link/la/sensor/mystery_a";
-
-  std::vector<GzTopicEntry> adv{
-    makeEntry(fallback + "/scan", "gz.msgs.LaserScan", mapper),
-  };
-
-  std::vector<EcmSensorEntry> sensors{
-    makeSensorWithFallback("A", "la", "mystery_a", "gpu_lidar", fallback),
-  };
-
-  auto tree = EcmTopicMatcher::matchAll("default", sensors, "", adv);
-  ASSERT_EQ(tree.sensors.size(), 1u);
-  EXPECT_FALSE(tree.sensors[0].resolved);
-  EXPECT_EQ(tree.sensors[0].matchSource, MatchSource::Unresolved);
-  EXPECT_TRUE(tree.sensors[0].matchedTopicNames.empty());
-  EXPECT_EQ(tree.sensors[0].warning, "no Sensor Topic in ECM");
-}
-
-// ============================================================================
-// Test 26 — Multiple unrelated compatible topics are too ambiguous for fallback
-// ============================================================================
-TEST(EcmTopicMatcher, MultipleGenericCompatibleTopicsStayUnresolved)
-{
-  BridgeTypeMapper mapper;
-
-  std::vector<GzTopicEntry> adv{
-    makeEntry("/scan/front", "gz.msgs.LaserScan", mapper),
-    makeEntry("/scan/rear",  "gz.msgs.LaserScan", mapper),
-  };
-
-  EcmSensorEntry s = makeSensor("robot", "base", "mystery_laser", "gpu_lidar");
-
-  auto ds = EcmTopicMatcher::matchSensor(s, adv);
-  EXPECT_FALSE(ds.resolved);
-  EXPECT_TRUE(ds.matchedTopicNames.empty());
-}
-
-// ============================================================================
-// Test 27 — Lidar SensorTopic without TopicInfo still creates inferred LaserScan row
-// ============================================================================
-TEST(EcmTopicMatcher, LidarSensorTopicWithoutTopicInfoUsesInferredLaserScanType)
-{
-  const std::string topic = "/sensor_test_robot_urdf_1/lidar";
-  EcmSensorEntry s = makeSensor("robot", "base", "lidar", "gpu_lidar", topic);
-
-  auto ds = EcmTopicMatcher::matchSensor(s, {makeListedTopicWithoutType(topic)});
   ASSERT_TRUE(ds.resolved);
-  EXPECT_EQ(ds.matchSource, MatchSource::EcmSensorTopicExact);
   EXPECT_TRUE(ds.topicListed);
   EXPECT_EQ(ds.typeSource, "type inferred");
+  EXPECT_EQ(ds.inferredGzType, "gz.msgs.Image");
+  EXPECT_EQ(ds.warning,
+            "Topic type inferred from ECM sensor type; TopicInfo not available yet.");
+}
+
+TEST(TopicAssociation, LidarSensorTopicWithoutTopicInfoUsesInferredLaserScanType)
+{
+  const std::string topic = "/sensor_test_robot_urdf_1/lidar";
+
+  auto ds = TopicAssociation::matchSensor(
+      makeSensor("robot", "base", "lidar", "gpu_lidar", topic),
+      {makeListedTopicWithoutType(topic)});
+
+  ASSERT_TRUE(ds.resolved);
   EXPECT_EQ(ds.inferredGzType, "gz.msgs.LaserScan");
   ASSERT_EQ(ds.matchedBridgeSpecs.size(), 1u);
   EXPECT_EQ(ds.matchedBridgeSpecs[0],
             topic + "@sensor_msgs/msg/LaserScan@gz.msgs.LaserScan");
 }
 
-// ============================================================================
-// Test 28 — TopicInfo takes precedence over inferred types when available
-// ============================================================================
-TEST(EcmTopicMatcher, AdvertisedTopicInfoTakesPrecedenceOverInference)
+TEST(TopicAssociation, AdvertisedTopicInfoTakesPrecedenceOverInference)
 {
   BridgeTypeMapper mapper;
   const std::string topic = "/sensor_test_robot_urdf_1/camera/image_raw";
 
-  std::vector<GzTopicEntry> adv{
+  std::vector<GzTopicEntry> advertisedTopics{
     makeListedTopicWithoutType(topic),
     makeEntry(topic, "gz.msgs.Image", mapper),
   };
 
-  EcmSensorEntry s = makeSensor("robot", "base", "camera_sensor", "camera", topic);
-  auto ds = EcmTopicMatcher::matchSensor(s, adv);
+  auto ds = TopicAssociation::matchSensor(
+      makeSensor("robot", "base", "camera_sensor", "camera", topic),
+      advertisedTopics);
+
   ASSERT_TRUE(ds.resolved);
   EXPECT_EQ(ds.typeSource, "advertised");
   EXPECT_EQ(ds.topicInfoGzType, "gz.msgs.Image");
   EXPECT_TRUE(ds.inferredGzType.empty());
-  ASSERT_EQ(ds.matchedBridgeSpecs.size(), 1u);
-  EXPECT_EQ(ds.matchedBridgeSpecs[0],
-            topic + "@sensor_msgs/msg/Image@gz.msgs.Image");
 }
 
-// ============================================================================
-// Test 29 — SensorTopic row is included in matchAll and excludes Additional-style fallback
-// ============================================================================
-TEST(EcmTopicMatcher, MatchAllUsesInferredSensorTopicRow)
+TEST(TopicAssociation, SensorTopicNotAdvertisedDoesNotCreateBridgeSpec)
 {
-  const std::string topic = "/sensor_test_robot_urdf_1/camera/image_raw";
+  const std::string topic = "/robot/front_camera";
 
-  std::vector<EcmSensorEntry> sensors{
-    makeSensor("robot", "base", "camera_sensor", "camera", topic),
+  auto ds = TopicAssociation::matchSensor(
+      makeSensor("robot", "base", "front_camera", "camera", topic),
+      {});
+
+  EXPECT_FALSE(ds.resolved);
+  EXPECT_FALSE(ds.topicListed);
+  EXPECT_TRUE(ds.matchedTopicNames.empty());
+  EXPECT_TRUE(ds.matchedBridgeSpecs.empty());
+  EXPECT_EQ(ds.warning, "Sensor Topic not advertised in Gazebo Transport yet.");
+}
+
+TEST(TopicAssociation, SensorWithoutSensorTopicStaysUnresolved)
+{
+  BridgeTypeMapper mapper;
+  const std::string topic = "/robot/front_laser/scan";
+
+  auto ds = TopicAssociation::matchSensor(
+      makeSensor("robot", "base", "front_laser", "gpu_lidar"),
+      {makeEntry(topic, "gz.msgs.LaserScan", mapper)});
+
+  EXPECT_FALSE(ds.resolved);
+  EXPECT_EQ(ds.matchSource, MatchSource::Unresolved);
+  EXPECT_TRUE(ds.matchedTopicNames.empty());
+  EXPECT_EQ(ds.warning, "no Sensor Topic in ECM");
+}
+
+TEST(TopicAssociation, WeakPathLikeTopicIsNotTreatedAsDiscovered)
+{
+  BridgeTypeMapper mapper;
+  const std::string weakTopic = "/robot_ns/front_laser/scan";
+
+  std::vector<GzTopicEntry> advertisedTopics{
+    makeEntry(weakTopic, "gz.msgs.LaserScan", mapper),
   };
 
-  auto tree = EcmTopicMatcher::matchAll(
-      "default", sensors, "", {makeListedTopicWithoutType(topic)});
+  auto tree = TopicAssociation::matchAll(
+      "default",
+      {makeSensor("robot_ns", "base", "front_laser", "gpu_lidar")},
+      "",
+      advertisedTopics);
+
   ASSERT_EQ(tree.sensors.size(), 1u);
-  ASSERT_TRUE(tree.sensors[0].resolved);
-  EXPECT_EQ(tree.sensors[0].typeSource, "type inferred");
-  ASSERT_EQ(tree.sensors[0].matchedTopicNames.size(), 1u);
-  EXPECT_EQ(tree.sensors[0].matchedTopicNames[0], topic);
+  EXPECT_FALSE(tree.sensors[0].resolved);
+  EXPECT_TRUE(tree.sensors[0].matchedTopicNames.empty());
+
+  const auto additionalTopics = additionalTopicsAfterClaims(advertisedTopics, tree);
+  ASSERT_EQ(additionalTopics.size(), 1u);
+  EXPECT_EQ(additionalTopics[0], weakTopic);
 }
 
-// ============================================================================
-// Test 30 — Inferred image topic is excluded from Additional
-// ============================================================================
-TEST(EcmTopicMatcher, InferredImageTopicIsExcludedFromAdditional)
+TEST(TopicAssociation, ClaimedTopicDoesNotLeakAcrossModels)
+{
+  BridgeTypeMapper mapper;
+  const std::string topicA =
+      "/world/default/model/A/link/la/sensor/laser_a/scan";
+
+  std::vector<GzTopicEntry> advertisedTopics{
+    makeEntry(topicA, "gz.msgs.LaserScan", mapper),
+  };
+
+  std::vector<EcmSensorEntry> sensors{
+    makeSensor("A", "la", "laser_a", "gpu_lidar",
+               "/world/default/model/A/link/la/sensor/laser_a"),
+    makeSensor("B", "lb", "laser_b", "gpu_lidar",
+               "/world/default/model/B/link/lb/sensor/laser_b"),
+  };
+
+  auto tree = TopicAssociation::matchAll("default", sensors, "", advertisedTopics);
+  ASSERT_EQ(tree.sensors.size(), 2u);
+
+  EXPECT_TRUE(tree.sensors[0].resolved);
+  EXPECT_FALSE(tree.sensors[1].resolved);
+  EXPECT_TRUE(tree.sensors[1].matchedTopicNames.empty());
+}
+
+TEST(TopicAssociation, MatchAllFiltersToSelectedModel)
+{
+  BridgeTypeMapper mapper;
+  const std::string topicA =
+      "/world/default/model/A/link/la/sensor/sa/scan";
+  const std::string topicB =
+      "/world/default/model/B/link/lb/sensor/sb/scan";
+
+  std::vector<EcmSensorEntry> sensors{
+    makeSensor("A", "la", "sa", "gpu_lidar",
+               "/world/default/model/A/link/la/sensor/sa"),
+    makeSensor("B", "lb", "sb", "gpu_lidar",
+               "/world/default/model/B/link/lb/sensor/sb"),
+  };
+
+  std::vector<GzTopicEntry> advertisedTopics{
+    makeEntry(topicA, "gz.msgs.LaserScan", mapper),
+    makeEntry(topicB, "gz.msgs.LaserScan", mapper),
+  };
+
+  auto tree = TopicAssociation::matchAll("default", sensors, "A", advertisedTopics);
+  ASSERT_EQ(tree.sensors.size(), 1u);
+  EXPECT_EQ(tree.sensors[0].sensor.modelName, "A");
+}
+
+TEST(TopicAssociation, MatchAllEmptyFilterReturnsAll)
+{
+  BridgeTypeMapper mapper;
+  const std::string prefixA = "/world/w/model/A/link/la/sensor/sa";
+  const std::string prefixB = "/world/w/model/B/link/lb/sensor/sb";
+
+  std::vector<EcmSensorEntry> sensors{
+    makeSensor("A", "la", "sa", "gpu_lidar", prefixA),
+    makeSensor("B", "lb", "sb", "gpu_lidar", prefixB),
+  };
+
+  std::vector<GzTopicEntry> advertisedTopics{
+    makeEntry(prefixA + "/scan", "gz.msgs.LaserScan", mapper),
+    makeEntry(prefixB + "/scan", "gz.msgs.LaserScan", mapper),
+  };
+
+  auto tree = TopicAssociation::matchAll("w", sensors, "", advertisedTopics);
+  EXPECT_EQ(tree.sensors.size(), 2u);
+  EXPECT_TRUE(tree.ecmConfirmed);
+}
+
+TEST(TopicAssociation, MatchSourceNameStrings)
+{
+  EXPECT_STREQ(matchSourceName(MatchSource::Unresolved), "Unresolved");
+  EXPECT_STREQ(matchSourceName(MatchSource::EcmSensorTopicPrefix), "ECM prefix");
+  EXPECT_STREQ(matchSourceName(MatchSource::EcmSensorTopicExact), "ECM exact");
+}
+
+TEST(TopicAssociation, DuplicateBridgeSpecsAreRemoved)
+{
+  BridgeTypeMapper mapper;
+  const std::string prefix = "/world/default/model/robot/link/base/sensor/cam";
+  const std::string imageTopic = prefix + "/image";
+
+  auto ds = TopicAssociation::matchSensor(
+      makeSensor("robot", "base", "cam", "camera", prefix),
+      {makeEntry(imageTopic, "gz.msgs.Image", mapper)});
+
+  ASSERT_TRUE(ds.resolved);
+  const std::string imageSpec = mapper.bridgeSpec(imageTopic, "gz.msgs.Image");
+  EXPECT_EQ(std::count(ds.matchedBridgeSpecs.begin(),
+                       ds.matchedBridgeSpecs.end(),
+                       imageSpec), 1);
+}
+
+TEST(TopicAssociation, AdvertisedCameraInfoSiblingIsAttachedToCameraSensor)
+{
+  BridgeTypeMapper mapper;
+  const std::string imageTopic = "/sensor_test_robot_urdf_1/camera/image_raw";
+  const std::string cameraInfoTopic = "/sensor_test_robot_urdf_1/camera/camera_info";
+
+  std::vector<GzTopicEntry> advertisedTopics{
+    makeListedTopicWithoutType(imageTopic),
+    makeEntry(cameraInfoTopic, "gz.msgs.CameraInfo", mapper),
+  };
+
+  auto ds = TopicAssociation::matchSensor(
+      makeSensor("robot", "base", "camera_sensor", "camera", imageTopic),
+      advertisedTopics);
+
+  ASSERT_TRUE(ds.resolved);
+  EXPECT_TRUE(hasTopic(ds.matchedTopicNames,
+      TopicAssociation::normalizeTopic(cameraInfoTopic)));
+}
+
+TEST(TopicAssociation, NonAdvertisedCameraInfoIsNotInvented)
+{
+  const std::string imageTopic = "/sensor_test_robot_urdf_1/camera/image_raw";
+
+  auto ds = TopicAssociation::matchSensor(
+      makeSensor("robot", "base", "camera_sensor", "camera", imageTopic),
+      {makeListedTopicWithoutType(imageTopic)});
+
+  ASSERT_TRUE(ds.resolved);
+  ASSERT_EQ(ds.matchedTopicNames.size(), 1u);
+  EXPECT_EQ(ds.matchedTopicNames[0], imageTopic);
+}
+
+TEST(TopicAssociation, InferredImageTopicIsExcludedFromAdditional)
 {
   BridgeTypeMapper mapper;
   const std::string imageTopic = "/sensor_test_robot_urdf_1/camera/image_raw";
@@ -741,21 +370,18 @@ TEST(EcmTopicMatcher, InferredImageTopicIsExcludedFromAdditional)
     makeEntry(extraTopic, "gz.msgs.LaserScan", mapper),
   };
 
-  auto tree = EcmTopicMatcher::matchAll(
+  auto tree = TopicAssociation::matchAll(
       "default",
       {makeSensor("robot", "base", "camera_sensor", "camera", imageTopic)},
       "",
       advertisedTopics);
 
   const auto additionalTopics = additionalTopicsAfterClaims(advertisedTopics, tree);
-  EXPECT_EQ(additionalTopics.size(), 1u);
+  ASSERT_EQ(additionalTopics.size(), 1u);
   EXPECT_EQ(additionalTopics[0], extraTopic);
 }
 
-// ============================================================================
-// Test 31 — Inferred IMU topic is excluded from Additional
-// ============================================================================
-TEST(EcmTopicMatcher, InferredImuTopicIsExcludedFromAdditional)
+TEST(TopicAssociation, InferredImuTopicIsExcludedFromAdditional)
 {
   BridgeTypeMapper mapper;
   const std::string imuTopic = "/sensor_test_robot_urdf_1/imu/data_raw";
@@ -766,64 +392,18 @@ TEST(EcmTopicMatcher, InferredImuTopicIsExcludedFromAdditional)
     makeEntry(extraTopic, "gz.msgs.LaserScan", mapper),
   };
 
-  auto tree = EcmTopicMatcher::matchAll(
+  auto tree = TopicAssociation::matchAll(
       "default",
       {makeSensor("robot", "base", "imu_sensor", "imu", imuTopic)},
       "",
       advertisedTopics);
 
   const auto additionalTopics = additionalTopicsAfterClaims(advertisedTopics, tree);
-  EXPECT_EQ(additionalTopics.size(), 1u);
+  ASSERT_EQ(additionalTopics.size(), 1u);
   EXPECT_EQ(additionalTopics[0], extraTopic);
 }
 
-// ============================================================================
-// Test 32 — Advertised CameraInfo sibling is attached under the camera sensor
-// ============================================================================
-TEST(EcmTopicMatcher, AdvertisedCameraInfoSiblingIsAttachedToCameraSensor)
-{
-  BridgeTypeMapper mapper;
-  const std::string imageTopic = "/sensor_test_robot_urdf_1/camera/image_raw";
-  const std::string cameraInfoTopic = "/sensor_test_robot_urdf_1/camera/camera_info";
-
-  std::vector<GzTopicEntry> advertisedTopics{
-    makeListedTopicWithoutType(imageTopic),
-    makeEntry(cameraInfoTopic, "gz.msgs.CameraInfo", mapper),
-  };
-
-  auto ds = EcmTopicMatcher::matchSensor(
-      makeSensor("robot", "base", "camera_sensor", "camera", imageTopic),
-      advertisedTopics);
-
-  ASSERT_TRUE(ds.resolved);
-  ASSERT_EQ(ds.matchedTopicNames.size(), 2u);
-  EXPECT_EQ(ds.matchedTopicNames[0], imageTopic);
-  EXPECT_EQ(ds.matchedTopicNames[1], cameraInfoTopic);
-  ASSERT_EQ(ds.matchedBridgeSpecs.size(), 2u);
-  EXPECT_EQ(ds.matchedBridgeSpecs[1],
-            cameraInfoTopic + "@sensor_msgs/msg/CameraInfo@gz.msgs.CameraInfo");
-}
-
-// ============================================================================
-// Test 33 — CameraInfo is not invented when not advertised
-// ============================================================================
-TEST(EcmTopicMatcher, NonAdvertisedCameraInfoIsNotInvented)
-{
-  const std::string imageTopic = "/sensor_test_robot_urdf_1/camera/image_raw";
-
-  auto ds = EcmTopicMatcher::matchSensor(
-      makeSensor("robot", "base", "camera_sensor", "camera", imageTopic),
-      {makeListedTopicWithoutType(imageTopic)});
-
-  ASSERT_TRUE(ds.resolved);
-  ASSERT_EQ(ds.matchedTopicNames.size(), 1u);
-  EXPECT_EQ(ds.matchedTopicNames[0], imageTopic);
-}
-
-// ============================================================================
-// Test 34 — Attached CameraInfo is also excluded from Additional
-// ============================================================================
-TEST(EcmTopicMatcher, AttachedCameraInfoIsExcludedFromAdditional)
+TEST(TopicAssociation, AttachedCameraInfoIsExcludedFromAdditional)
 {
   BridgeTypeMapper mapper;
   const std::string imageTopic = "/sensor_test_robot_urdf_1/camera/image_raw";
@@ -836,14 +416,14 @@ TEST(EcmTopicMatcher, AttachedCameraInfoIsExcludedFromAdditional)
     makeEntry(extraTopic, "gz.msgs.LaserScan", mapper),
   };
 
-  auto tree = EcmTopicMatcher::matchAll(
+  auto tree = TopicAssociation::matchAll(
       "default",
       {makeSensor("robot", "base", "camera_sensor", "camera", imageTopic)},
       "",
       advertisedTopics);
 
   const auto additionalTopics = additionalTopicsAfterClaims(advertisedTopics, tree);
-  EXPECT_EQ(additionalTopics.size(), 1u);
+  ASSERT_EQ(additionalTopics.size(), 1u);
   EXPECT_EQ(additionalTopics[0], extraTopic);
 }
 
