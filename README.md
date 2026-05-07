@@ -42,7 +42,7 @@ flowchart LR
 
 ## Demo
 
-![Bridge manager demo](demo1.gif)
+![Bridge manager demo](demo_bridge_rob.gif)
 
 ## Requirements
 
