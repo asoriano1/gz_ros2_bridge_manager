@@ -27,9 +27,20 @@ namespace gz_ros2_bridge_manager
 
 /// Gazebo GUI plugin — ECM-first multi-model accordion workflow.
 ///
-/// Inherits from gz::sim::GuiSystem so that the ECM Update() callback is
-/// invoked on every simulation step.  All Qt interactions are guarded to the
-/// main thread via Qt::QueuedConnection.
+/// The plugin discovers ROS 2-bridgeable Gazebo topics by combining two
+/// sources:
+///   - the ECM (Entity Component Manager), walked from Update() to find
+///     models and the sensors declared inside them;
+///   - the live gz-transport topic list, queried from a background worker.
+///
+/// Candidates are grouped per model and shown in a QML accordion. The user
+/// picks which topics to bridge; the plugin assembles the corresponding
+/// `parameter_bridge` command and can run / stop it via BridgeProcessManager.
+///
+/// Threading: ECM updates run on the Gazebo update thread (only `ecmSnapshot_`
+/// is written there, behind `ecmMutex_`); everything else runs on the Qt main
+/// thread. Background work uses QtConcurrent::run and posts back to Qt via
+/// QueuedConnection.
 class Ros2BridgeManagerGui : public gz::sim::GuiSystem
 {
   Q_OBJECT
@@ -93,15 +104,29 @@ public:
   QString      runningBridgeCommand() const { return bridgeProcess_.runningBridgeCommand(); }
 
   // ---- Invokables ----
+
+  /// Triggers a full ECM + gz-transport rediscovery on a worker thread.
   Q_INVOKABLE void refresh();
+  /// Persists a user toggle for `topic` under `modelName`.
   Q_INVOKABLE void setTopicChecked(const QString &modelName, const QString &topic, bool checked);
+  /// Persists a user toggle for an "Additional" topic (one that is not tied
+  /// to any ECM model).
   Q_INVOKABLE void setAdditionalTopicChecked(const QString &topic, bool checked);
+  /// Discards every user override for `modelName`, returning that model's
+  /// selection to the heuristic default.
   Q_INVOKABLE void resetModelSelection(const QString &modelName);
+  /// Copies the currently assembled bridge command to the clipboard.
   Q_INVOKABLE void copyBridgeCommand();
+  /// Enables or disables the periodic auto-refresh timer.
   Q_INVOKABLE void setAutoRefresh(bool enabled);
+  /// Starts the parameter_bridge child process with the current selection.
   Q_INVOKABLE void runBridge();
+  /// Gracefully stops the running parameter_bridge process.
   Q_INVOKABLE void stopBridge();
+  /// Stops then restarts the running parameter_bridge (used when the
+  /// selection diverges from what is on the wire).
   Q_INVOKABLE void restartBridge();
+  /// Clears the captured stdout/stderr buffer of the bridge process.
   Q_INVOKABLE void clearBridgeOutput();
 
 signals:

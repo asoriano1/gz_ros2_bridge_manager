@@ -8,7 +8,7 @@ This package is part of the **Gazebo ROS 2 Model Runtime Suite** where each modu
 
 - **[GZ Bridge Manager](https://github.com/asoriano1/gz_ros2_bridge_manager)** (`gz_ros2_bridge_manager`)
   Discovers active Gazebo sensor topics and launches the required ROS 2 bridges.
-- [Model Importer](https://github.com/asoriano1/gz_model_importer_plugin) (`gz_model_importer_plugin`) — imports URDF / XACRO / SDF models with preview, spawn, and optional `robot_state_publisher`.
+- [Model Importer](https://github.com/asoriano1/gz_model_importer) (`gz_model_importer`) — imports URDF / XACRO / SDF models with preview, spawn, and optional `robot_state_publisher`.
 - [ROS2 Control Manager](https://github.com/asoriano1/gz_ros2_control_manager) (`gz_ros2_control_manager`) — discovers controller managers and provides a UI to load, configure, and activate controllers.
 
 This repository provides the **GZ Bridge Manager** module.
@@ -38,7 +38,7 @@ flowchart LR
 - Groups bridgeable topics by model
 - Builds the required `ros_gz_bridge parameter_bridge` command
 - Lets the user run, stop, and restart the managed bridge from Gazebo
-- Fits naturally after a model has been imported with `gz_model_importer_plugin`
+- Fits naturally after a model has been imported with `gz_model_importer`
 
 ## Demo
 
@@ -80,7 +80,7 @@ gz sim <your_world.sdf> \
 ## Typical Workflow
 
 1. Start Gazebo with a robot already present in the world.
-2. If needed, import the robot first with `gz_model_importer_plugin`.
+2. If needed, import the robot first with `gz_model_importer`.
 3. Open the Bridge Manager panel and click **Refresh**, or enable **Auto**.
 4. Review the topics discovered under each model.
 5. Select the bridges you want to run.

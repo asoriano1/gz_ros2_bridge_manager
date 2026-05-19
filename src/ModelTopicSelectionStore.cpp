@@ -73,11 +73,6 @@ void ModelTopicSelectionStore::resetKey(const std::string &key)
   data_.erase(key);
 }
 
-void ModelTopicSelectionStore::forgetKey(const std::string &key)
-{
-  data_.erase(key);
-}
-
 // ---- Application -----------------------------------------------------------
 
 void ModelTopicSelectionStore::applyOverrides(

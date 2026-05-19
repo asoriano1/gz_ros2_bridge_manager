@@ -34,12 +34,11 @@ namespace
 
 constexpr int  kAutoRefreshIntervalMs = 2500;
 constexpr const char *kAdditionalMarker = "__additional__";
-constexpr bool kDebugTopicAssignment = true;
 
+/// Routes a verbose trace line through Gazebo's debug channel
+/// (visible with `--verbose 4` or GZ_VERBOSE).
 void debugLog(const std::string &message)
 {
-  if (!kDebugTopicAssignment)
-    return;
   gzdbg << "[gz_ros2_bridge_manager][debug] " << message << '\n';
 }
 
@@ -457,46 +456,43 @@ void Ros2BridgeManagerGui::recomputeAndPublish()
     tree.sensors.push_back(sensor);
   }
 
-  if (kDebugTopicAssignment)
+  debugLog("ECM models:");
+  for (const auto &model : ecmSnapshot.models)
   {
-    debugLog("ECM models:");
-    for (const auto &model : ecmSnapshot.models)
-    {
-      std::ostringstream modelLog;
-      modelLog << "  model=" << model.modelName
-               << "(" << model.modelEntity << ")"
-               << ", nested=" << (model.nestedModel ? "true" : "false");
-      debugLog(modelLog.str());
+    std::ostringstream modelLog;
+    modelLog << "  model=" << model.modelName
+             << "(" << model.modelEntity << ")"
+             << ", nested=" << (model.nestedModel ? "true" : "false");
+    debugLog(modelLog.str());
 
-      for (const auto &link : model.links)
-      {
-        std::ostringstream linkLog;
-        linkLog << "    link=" << link.linkName
-                << "(" << link.linkEntity << ")";
-        debugLog(linkLog.str());
-      }
+    for (const auto &link : model.links)
+    {
+      std::ostringstream linkLog;
+      linkLog << "    link=" << link.linkName
+              << "(" << link.linkEntity << ")";
+      debugLog(linkLog.str());
+    }
+  }
+
+  debugLog("claimed topics:");
+  for (const auto &topic : claimedEcmTopics)
+    debugLog("  claimed: " + topic);
+
+  debugLog("discovered camera/info topics:");
+  for (const auto &entry : discoveredTopics_)
+  {
+    if (!containsCameraOrInfo(entry.topicName) &&
+        !containsCameraOrInfo(entry.gzMsgType))
+    {
+      continue;
     }
 
-    debugLog("claimed topics:");
-    for (const auto &topic : claimedEcmTopics)
-      debugLog("  claimed: " + topic);
-
-    debugLog("discovered camera/info topics:");
-    for (const auto &entry : discoveredTopics_)
-    {
-      if (!containsCameraOrInfo(entry.topicName) &&
-          !containsCameraOrInfo(entry.gzMsgType))
-      {
-        continue;
-      }
-
-      std::ostringstream oss;
-      oss << "  discovered: topic=" << TopicAssociation::normalizeTopic(entry.topicName)
-          << ", gzType=" << (entry.gzMsgType.empty() ? "<none>" : entry.gzMsgType)
-          << ", rosType=" << (entry.ros2MsgType.empty() ? "<none>" : entry.ros2MsgType)
-          << ", bridgeable=" << (entry.bridgeable ? "true" : "false");
-      debugLog(oss.str());
-    }
+    std::ostringstream oss;
+    oss << "  discovered: topic=" << TopicAssociation::normalizeTopic(entry.topicName)
+        << ", gzType=" << (entry.gzMsgType.empty() ? "<none>" : entry.gzMsgType)
+        << ", rosType=" << (entry.ros2MsgType.empty() ? "<none>" : entry.ros2MsgType)
+        << ", bridgeable=" << (entry.bridgeable ? "true" : "false");
+    debugLog(oss.str());
   }
 
   for (const auto &modelName : modelNames)
@@ -527,61 +523,58 @@ void Ros2BridgeManagerGui::recomputeAndPublish()
   const auto additionalBridgeableTopics =
       TopicAssociation::bridgeableTopicsExcludingClaims(discoveredTopics_, allSensorsTree);
 
-  if (kDebugTopicAssignment)
+  for (const auto &modelEntry : treesByModel)
   {
-    for (const auto &modelEntry : treesByModel)
+    const auto &tree = modelEntry.second;
+    for (const auto &sensor : tree.sensors)
     {
-      const auto &tree = modelEntry.second;
-      for (const auto &sensor : tree.sensors)
+      std::ostringstream header;
+      header << "model=" << sensor.sensor.modelName
+             << "(" << sensor.sensor.modelEntity << ")"
+             << ", link=" << (sensor.sensor.linkName.empty() ? "<none>" : sensor.sensor.linkName)
+             << "(" << sensor.sensor.linkEntity << ")"
+             << ", sensor=" << sensor.sensor.sensorName
+             << "(" << sensor.sensor.sensorEntity << ")"
+             << ", sensorType=" << sensor.sensor.sensorType
+             << ", SensorTopic="
+             << (sensor.sensor.declaredTopic.empty() ? "<none>" : sensor.sensor.declaredTopic)
+             << ", fallback="
+             << (sensor.sensor.fallbackGazeboTopicPrefix.empty()
+                     ? "<none>"
+                     : sensor.sensor.fallbackGazeboTopicPrefix);
+      debugLog(header.str());
+
+      for (size_t i = 0; i < sensor.matchedTopicNames.size(); ++i)
       {
-        std::ostringstream header;
-        header << "model=" << sensor.sensor.modelName
-               << "(" << sensor.sensor.modelEntity << ")"
-               << ", link=" << (sensor.sensor.linkName.empty() ? "<none>" : sensor.sensor.linkName)
-               << "(" << sensor.sensor.linkEntity << ")"
-               << ", sensor=" << sensor.sensor.sensorName
-               << "(" << sensor.sensor.sensorEntity << ")"
-               << ", sensorType=" << sensor.sensor.sensorType
-               << ", SensorTopic="
-               << (sensor.sensor.declaredTopic.empty() ? "<none>" : sensor.sensor.declaredTopic)
-               << ", fallback="
-               << (sensor.sensor.fallbackGazeboTopicPrefix.empty()
-                       ? "<none>"
-                       : sensor.sensor.fallbackGazeboTopicPrefix);
-        debugLog(header.str());
+        const std::string topic =
+            TopicAssociation::normalizeTopic(sensor.matchedTopicNames[i]);
+        const std::string spec =
+            i < sensor.matchedBridgeSpecs.size() ? sensor.matchedBridgeSpecs[i] : std::string{};
+        const std::string gzType = gzTypeFromBridgeSpec(spec);
+        const std::string rosType = ros2TypeFromBridgeSpec(spec);
+        const std::string source = matchedTopicSourceLabel(sensor, topic, gzType);
 
-        for (size_t i = 0; i < sensor.matchedTopicNames.size(); ++i)
-        {
-          const std::string topic =
-              TopicAssociation::normalizeTopic(sensor.matchedTopicNames[i]);
-          const std::string spec =
-              i < sensor.matchedBridgeSpecs.size() ? sensor.matchedBridgeSpecs[i] : std::string{};
-          const std::string gzType = gzTypeFromBridgeSpec(spec);
-          const std::string rosType = ros2TypeFromBridgeSpec(spec);
-          const std::string source = matchedTopicSourceLabel(sensor, topic, gzType);
-
-          std::ostringstream topicLog;
-          topicLog << "  matched: topic=" << topic
-                   << ", gzType=" << (gzType.empty() ? "<none>" : gzType)
-                   << ", rosType=" << (rosType.empty() ? "<none>" : rosType)
-                   << ", source=" << source;
-          debugLog(topicLog.str());
-        }
+        std::ostringstream topicLog;
+        topicLog << "  matched: topic=" << topic
+                 << ", gzType=" << (gzType.empty() ? "<none>" : gzType)
+                 << ", rosType=" << (rosType.empty() ? "<none>" : rosType)
+                 << ", source=" << source;
+        debugLog(topicLog.str());
       }
     }
-
-    debugLog("additional topics before dedup:");
-    for (const auto &entry : discoveredTopics_)
-    {
-      if (!entry.bridgeable || entry.bridgeSpec.empty())
-        continue;
-      debugLog("  additional-pre: " + TopicAssociation::normalizeTopic(entry.topicName));
-    }
-
-    debugLog("additional topics after dedup:");
-    for (const auto &entry : additionalBridgeableTopics)
-      debugLog("  additional-post: " + TopicAssociation::normalizeTopic(entry.topicName));
   }
+
+  debugLog("additional topics before dedup:");
+  for (const auto &entry : discoveredTopics_)
+  {
+    if (!entry.bridgeable || entry.bridgeSpec.empty())
+      continue;
+    debugLog("  additional-pre: " + TopicAssociation::normalizeTopic(entry.topicName));
+  }
+
+  debugLog("additional topics after dedup:");
+  for (const auto &entry : additionalBridgeableTopics)
+    debugLog("  additional-post: " + TopicAssociation::normalizeTopic(entry.topicName));
 
   for (const auto &entry : additionalBridgeableTopics)
   {
