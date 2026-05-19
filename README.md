@@ -8,7 +8,7 @@ This package is part of the **Gazebo ROS 2 Model Runtime Suite** where each modu
 
 - **[GZ Bridge Manager](https://github.com/asoriano1/gz_ros2_bridge_manager)** (`gz_ros2_bridge_manager`)
   Discovers active Gazebo sensor topics and launches the required ROS 2 bridges.
-- [Model Importer](https://github.com/asoriano1/gz_model_importer) (`gz_model_importer`) — imports URDF / XACRO / SDF models with preview, spawn, and optional `robot_state_publisher`.
+- [Model Importer](https://github.com/asoriano1/gz_model_importer_plugin) (`gz_model_importer`) — imports URDF / XACRO / SDF models with preview, spawn, and optional `robot_state_publisher`.
 - [ROS2 Control Manager](https://github.com/asoriano1/gz_ros2_control_manager) (`gz_ros2_control_manager`) — discovers controller managers and provides a UI to load, configure, and activate controllers.
 
 This repository provides the **GZ Bridge Manager** module.
